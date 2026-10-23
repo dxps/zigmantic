@@ -98,6 +98,8 @@ separate packages only after their APIs and release cycles become independently 
 - All 157 official N-Triples and N-Quads positive and negative syntax cases pass.
 - The whole-document RDF line-syntax API now has documented ownership, ordering, and
   error guarantees in `docs/api.md`.
+- The public `iri` module implements allocator-owned RFC 3986/3987 relative IRI
+  resolution and passes the RFC normal and abnormal example tables.
 
 ## Milestone status
 
@@ -108,9 +110,9 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Design the shared lexer and IRI-resolution boundary for Turtle and TriG.
-2. Implement RFC 3986/3987-compatible relative IRI resolution with focused tests.
-3. Begin the Turtle parser with directives, prefixed names, and base IRI resolution.
+1. Design the shared lexer boundary for Turtle and TriG.
+2. Begin the Turtle parser with `@base`, `@prefix`, `BASE`, and `PREFIX` directives.
+3. Add IRI references and prefixed names using the shared resolver.
 
 ## Session log
 
@@ -204,3 +206,14 @@ separate packages only after their APIs and release cycles become independently 
   describes both N-Triples and N-Quads behavior.
 - Kept whole-document APIs separate from future streaming APIs.
 - Retained all 24 local tests and all 157 official syntax cases.
+
+### 2026-10-24 — IRI reference resolution
+
+- Added a public, allocator-owned `iri.resolveAlloc` API with explicit `ResolveError`.
+- Implemented RFC 3986 component parsing, path merging, dot-segment removal, and
+  recomposition for absolute and relative references.
+- Applied the same algorithm to UTF-8 IRI references according to RFC 3987 section 6.5.
+- Preserved Unicode text, percent-escape spelling, queries, and fragments without
+  dereferencing or optional normalization.
+- Covered the RFC 3986 normal and abnormal resolution examples, Unicode IRIs, invalid
+  bases and references, malformed UTF-8, and exhaustive allocation failures.

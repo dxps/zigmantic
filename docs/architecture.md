@@ -57,3 +57,11 @@ independent of lower-level term-constructor validation details.
 The stable whole-document line-syntax surface and its ownership rules are recorded in
 `docs/api.md`. Serializers preserve statement iteration order but do not perform graph
 canonicalization or blank-node relabeling.
+
+## IRI resolution
+
+IRI reference resolution is a standalone `iri` module because Turtle, TriG, SPARQL, and
+other syntaxes share the same operation. It implements the RFC 3986 section 5.2 merge and
+dot-segment algorithm, applied directly to Unicode IRI references as specified by RFC
+3987 section 6.5. Resolution preserves Unicode and percent-escape spelling and performs
+no dereferencing or optional normalization.

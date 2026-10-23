@@ -30,3 +30,13 @@ They do not sort statements, relabel blank nodes, or perform RDF graph canonical
 
 Streaming parsers and writers may be added later as separate APIs. Their addition must
 not change the ownership or output guarantees of these whole-document functions.
+
+## IRI references
+
+`iri.resolveAlloc(allocator, base, reference)` returns an owned absolute IRI using the
+RFC 3986 reference-resolution algorithm as applied to IRIs by RFC 3987. The caller frees
+the result with the supplied allocator. `ResolveError` distinguishes invalid bases,
+invalid references, malformed UTF-8, and allocation failure.
+
+Resolution is not normalization: Unicode text and percent-escape spelling are preserved,
+and the function performs no network access.
