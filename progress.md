@@ -90,7 +90,9 @@ separate packages only after their APIs and release cycles become independently 
   conformance runner.
 - Canonical N-Triples serialization, exact Unicode blank-node label validation, and
   stable parse/serialize/parse round trips are implemented.
-- The local suite has 20 tests; all 70 official syntax cases continue to pass.
+- N-Quads parsing and canonical serialization reuse the validated N-Triples term grammar
+  and support default, IRI-named, and blank-node-named graphs.
+- The local suite has 24 tests; all 70 official N-Triples syntax cases continue to pass.
 
 ## Milestone status
 
@@ -101,9 +103,9 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Review and freeze the N-Triples public API and error surface.
-2. Implement N-Quads parsing and serialization by sharing the N-Triples term grammar.
-3. Pin and run the official RDF 1.1 N-Quads syntax suite.
+1. Pin and run the official RDF 1.1 N-Quads syntax suite.
+2. Close any N-Quads grammar gaps exposed by the official manifest.
+3. Review and freeze the line-syntax public API and error surface.
 
 ## Session log
 
@@ -167,3 +169,13 @@ separate packages only after their APIs and release cycles become independently 
 - Rejected programmatic blank-node identifiers that cannot be represented in N-Triples.
 - Added byte-exact output, stable round-trip, Unicode boundary, and allocation-failure
   coverage while retaining a full pass of the official syntax manifest.
+
+### 2026-10-24 — N-Quads implementation
+
+- Refactored the private line parser to share term grammar without changing the public
+  N-Triples API.
+- Added owned-dataset `parseNQuads` and canonical-layout `serializeNQuadsAlloc` APIs.
+- Supported default graphs plus IRI and blank-node graph labels.
+- Added invalid graph-label, extra-term, byte-exact output, stable round-trip, and
+  exhaustive allocation-failure coverage.
+- Retained a full pass of the official N-Triples syntax manifest.

@@ -9,6 +9,12 @@ The first suite is RDF 1.1 N-Triples:
 - Normative specification: <https://www.w3.org/TR/2014/REC-n-triples-20140225/>
 - Published test suite: <https://w3c.github.io/rdf-tests/rdf/rdf11/rdf-n-triples/>
 
+The next suite is RDF 1.1 N-Quads:
+`rdf/rdf11/rdf-n-quads/manifest.ttl`.
+
+- Normative specification: <https://www.w3.org/TR/2014/REC-n-quads-20140225/>
+- Published test suite: <https://w3c.github.io/rdf-tests/rdf/rdf11/rdf-n-quads/>
+
 The RDF 1.1 N-Triples suite is pinned and imported under `rdf11-ntriples`. Its
 `UPSTREAM.md` records the exact revision and import scope. Imported files retain the
 upstream test-suite license and must not be modified to make tests pass.

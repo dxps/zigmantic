@@ -16,9 +16,21 @@ pub fn parseNTriples(allocator: std.mem.Allocator, input: []const u8) Error!rdf.
     var graph = rdf.Graph.init(allocator);
     errdefer graph.deinit();
 
-    var parser = NTriplesParser{ .allocator = allocator, .input = input };
-    try parser.parseInto(&graph);
+    var parser = LineParser{ .allocator = allocator, .input = input };
+    try parser.parseNTriplesInto(&graph);
     return graph;
+}
+
+/// Parses one complete RDF 1.1 N-Quads document into an owned dataset.
+pub fn parseNQuads(allocator: std.mem.Allocator, input: []const u8) Error!rdf.Dataset {
+    if (!std.unicode.utf8ValidateSlice(input)) return error.InvalidUtf8;
+
+    var dataset = rdf.Dataset.init(allocator);
+    errdefer dataset.deinit();
+
+    var parser = LineParser{ .allocator = allocator, .input = input };
+    try parser.parseNQuadsInto(&dataset);
+    return dataset;
 }
 
 /// Serializes a graph using the canonical RDF 1.1 N-Triples layout.
@@ -37,6 +49,33 @@ pub fn serializeNTriplesAlloc(
         try appendTerm(allocator, &output, &graph.terms, triple.predicate);
         try output.append(allocator, ' ');
         try appendTerm(allocator, &output, &graph.terms, triple.object);
+        try output.appendSlice(allocator, " .\n");
+    }
+    return output.toOwnedSlice(allocator);
+}
+
+/// Serializes a dataset using the canonical RDF 1.1 N-Quads layout.
+/// Quad order follows dataset iteration order; blank nodes are not relabeled.
+pub fn serializeNQuadsAlloc(
+    allocator: std.mem.Allocator,
+    dataset: *const rdf.Dataset,
+) SerializeError![]u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+
+    for (dataset.items()) |quad| {
+        try appendTerm(allocator, &output, &dataset.terms, quad.subject);
+        try output.append(allocator, ' ');
+        try appendTerm(allocator, &output, &dataset.terms, quad.predicate);
+        try output.append(allocator, ' ');
+        try appendTerm(allocator, &output, &dataset.terms, quad.object);
+        switch (quad.graph_name) {
+            .default => {},
+            .named => |graph_name| {
+                try output.append(allocator, ' ');
+                try appendTerm(allocator, &output, &dataset.terms, graph_name);
+            },
+        }
         try output.appendSlice(allocator, " .\n");
     }
     return output.toOwnedSlice(allocator);
@@ -88,12 +127,12 @@ fn appendIri(
     try output.append(allocator, '>');
 }
 
-const NTriplesParser = struct {
+const LineParser = struct {
     allocator: std.mem.Allocator,
     input: []const u8,
     index: usize = 0,
 
-    fn parseInto(self: *NTriplesParser, graph: *rdf.Graph) Error!void {
+    fn parseNTriplesInto(self: *LineParser, graph: *rdf.Graph) Error!void {
         try self.skipEmptyLinesAndComments();
         while (!self.atEnd()) {
             const subject = try self.parseSubject(&graph.terms);
@@ -102,10 +141,7 @@ const NTriplesParser = struct {
             self.skipHorizontalWhitespace();
             const object = try self.parseObject(&graph.terms);
             self.skipHorizontalWhitespace();
-            try self.expect('.');
-            self.skipHorizontalWhitespace();
-            if (self.peek() == '#') self.skipComment();
-            try self.consumeLineEndOrEof();
+            try self.finishStatement();
 
             _ = try graph.add(.{
                 .subject = subject,
@@ -116,7 +152,41 @@ const NTriplesParser = struct {
         }
     }
 
-    fn parseSubject(self: *NTriplesParser, pool: *rdf.TermPool) Error!rdf.TermId {
+    fn parseNQuadsInto(self: *LineParser, dataset: *rdf.Dataset) Error!void {
+        try self.skipEmptyLinesAndComments();
+        while (!self.atEnd()) {
+            const subject = try self.parseSubject(&dataset.terms);
+            self.skipHorizontalWhitespace();
+            const predicate = try self.parseIri(&dataset.terms);
+            self.skipHorizontalWhitespace();
+            const object = try self.parseObject(&dataset.terms);
+            self.skipHorizontalWhitespace();
+
+            const graph_name: rdf.GraphName = if (self.peek() == '.')
+                .default
+            else
+                .{ .named = try self.parseSubject(&dataset.terms) };
+            self.skipHorizontalWhitespace();
+            try self.finishStatement();
+
+            _ = try dataset.add(.{
+                .subject = subject,
+                .predicate = predicate,
+                .object = object,
+                .graph_name = graph_name,
+            });
+            try self.skipEmptyLinesAndComments();
+        }
+    }
+
+    fn finishStatement(self: *LineParser) Error!void {
+        try self.expect('.');
+        self.skipHorizontalWhitespace();
+        if (self.peek() == '#') self.skipComment();
+        try self.consumeLineEndOrEof();
+    }
+
+    fn parseSubject(self: *LineParser, pool: *rdf.TermPool) Error!rdf.TermId {
         return switch (self.peek() orelse return error.InvalidSyntax) {
             '<' => self.parseIri(pool),
             '_' => self.parseBlankNode(pool),
@@ -124,7 +194,7 @@ const NTriplesParser = struct {
         };
     }
 
-    fn parseObject(self: *NTriplesParser, pool: *rdf.TermPool) Error!rdf.TermId {
+    fn parseObject(self: *LineParser, pool: *rdf.TermPool) Error!rdf.TermId {
         return switch (self.peek() orelse return error.InvalidSyntax) {
             '<' => self.parseIri(pool),
             '_' => self.parseBlankNode(pool),
@@ -133,14 +203,14 @@ const NTriplesParser = struct {
         };
     }
 
-    fn parseIri(self: *NTriplesParser, pool: *rdf.TermPool) Error!rdf.TermId {
+    fn parseIri(self: *LineParser, pool: *rdf.TermPool) Error!rdf.TermId {
         var value: std.ArrayList(u8) = .empty;
         defer value.deinit(self.allocator);
         try self.parseIriValue(&value);
         return pool.internNamedNode(value.items) catch |err| return mapTermError(err);
     }
 
-    fn parseIriValue(self: *NTriplesParser, value: *std.ArrayList(u8)) Error!void {
+    fn parseIriValue(self: *LineParser, value: *std.ArrayList(u8)) Error!void {
         try self.expect('<');
         while (self.peek()) |byte| {
             switch (byte) {
@@ -162,7 +232,7 @@ const NTriplesParser = struct {
         return error.InvalidSyntax;
     }
 
-    fn parseBlankNode(self: *NTriplesParser, pool: *rdf.TermPool) Error!rdf.TermId {
+    fn parseBlankNode(self: *LineParser, pool: *rdf.TermPool) Error!rdf.TermId {
         try self.expect('_');
         try self.expect(':');
         const start = self.index;
@@ -183,7 +253,7 @@ const NTriplesParser = struct {
         return pool.internBlankNode(self.input[start..self.index]) catch |err| return mapTermError(err);
     }
 
-    fn parseLiteral(self: *NTriplesParser, pool: *rdf.TermPool) Error!rdf.TermId {
+    fn parseLiteral(self: *LineParser, pool: *rdf.TermPool) Error!rdf.TermId {
         var lexical_form: std.ArrayList(u8) = .empty;
         defer lexical_form.deinit(self.allocator);
 
@@ -222,7 +292,7 @@ const NTriplesParser = struct {
         return pool.internSimpleLiteral(lexical_form.items) catch |err| return mapTermError(err);
     }
 
-    fn parseLanguageTag(self: *NTriplesParser) Error![]const u8 {
+    fn parseLanguageTag(self: *LineParser) Error![]const u8 {
         const start = self.index;
         while (self.peek()) |byte| {
             if (!std.ascii.isAlphabetic(byte)) break;
@@ -242,7 +312,7 @@ const NTriplesParser = struct {
         return self.input[start..self.index];
     }
 
-    fn parseStringEscape(self: *NTriplesParser, output: *std.ArrayList(u8)) Error!void {
+    fn parseStringEscape(self: *LineParser, output: *std.ArrayList(u8)) Error!void {
         const escaped = self.peek() orelse return error.InvalidSyntax;
         self.index += 1;
         const decoded: u8 = switch (escaped) {
@@ -263,7 +333,7 @@ const NTriplesParser = struct {
         try output.append(self.allocator, decoded);
     }
 
-    fn parseUnicodeEscape(self: *NTriplesParser, output: *std.ArrayList(u8)) Error!void {
+    fn parseUnicodeEscape(self: *LineParser, output: *std.ArrayList(u8)) Error!void {
         const marker = self.peek() orelse return error.InvalidSyntax;
         self.index += 1;
         const digits: usize = switch (marker) {
@@ -287,7 +357,7 @@ const NTriplesParser = struct {
         try output.appendSlice(self.allocator, encoded[0..length]);
     }
 
-    fn skipEmptyLinesAndComments(self: *NTriplesParser) Error!void {
+    fn skipEmptyLinesAndComments(self: *LineParser) Error!void {
         while (true) {
             self.skipHorizontalWhitespace();
             if (self.peek() == '#') self.skipComment();
@@ -296,26 +366,26 @@ const NTriplesParser = struct {
         }
     }
 
-    fn skipHorizontalWhitespace(self: *NTriplesParser) void {
+    fn skipHorizontalWhitespace(self: *LineParser) void {
         while (self.peek()) |byte| {
             if (byte != ' ' and byte != '\t') return;
             self.index += 1;
         }
     }
 
-    fn skipComment(self: *NTriplesParser) void {
+    fn skipComment(self: *LineParser) void {
         while (self.peek()) |byte| {
             if (byte == '\n' or byte == '\r') return;
             self.index += 1;
         }
     }
 
-    fn consumeLineEndOrEof(self: *NTriplesParser) Error!void {
+    fn consumeLineEndOrEof(self: *LineParser) Error!void {
         if (self.atEnd()) return;
         if (!(try self.consumeLineEnd())) return error.InvalidSyntax;
     }
 
-    fn consumeLineEnd(self: *NTriplesParser) Error!bool {
+    fn consumeLineEnd(self: *LineParser) Error!bool {
         if (self.peek() == '\n') {
             self.index += 1;
             return true;
@@ -329,17 +399,17 @@ const NTriplesParser = struct {
         return false;
     }
 
-    fn expect(self: *NTriplesParser, expected: u8) Error!void {
+    fn expect(self: *LineParser, expected: u8) Error!void {
         if (self.peek() != expected) return error.InvalidSyntax;
         self.index += 1;
     }
 
-    fn peek(self: *const NTriplesParser) ?u8 {
+    fn peek(self: *const LineParser) ?u8 {
         if (self.atEnd()) return null;
         return self.input[self.index];
     }
 
-    fn atEnd(self: *const NTriplesParser) bool {
+    fn atEnd(self: *const LineParser) bool {
         return self.index >= self.input.len;
     }
 };
@@ -531,6 +601,74 @@ test "N-Triples I/O handles every allocation failure without leaks" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         exerciseNTriplesAllocations,
+        .{},
+    );
+}
+
+test "N-Quads parses default, IRI-named, and blank-node-named graphs" {
+    const input =
+        "<https://example.com/s> <https://example.com/p> \"default\" .\n" ++
+        "_:s <https://example.com/p> <https://example.com/o> <https://example.com/graph> .\n" ++
+        "<https://example.com/s> <https://example.com/p> \"named\"@EN _:graph .\n";
+    var dataset = try parseNQuads(std.testing.allocator, input);
+    defer dataset.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), dataset.len());
+    try std.testing.expectEqual(rdf.GraphName.default, dataset.items()[0].graph_name);
+    const iri_graph = dataset.terms.view(dataset.items()[1].graph_name.named).?.named_node;
+    try std.testing.expectEqualStrings("https://example.com/graph", iri_graph);
+    const blank_graph = dataset.terms.view(dataset.items()[2].graph_name.named).?.blank_node;
+    try std.testing.expectEqualStrings("graph", blank_graph);
+}
+
+test "N-Quads rejects invalid graph labels and extra terms" {
+    const invalid = [_][]const u8{
+        "<https://example.com/s> <https://example.com/p> \"o\" \"literal graph\" .\n",
+        "<https://example.com/s> <https://example.com/p> \"o\" <relative> .\n",
+        "<https://example.com/s> <https://example.com/p> \"o\" <https://example.com/g> <https://example.com/extra> .\n",
+    };
+    for (invalid) |input| {
+        try std.testing.expectError(error.InvalidSyntax, parseNQuads(std.testing.allocator, input));
+    }
+}
+
+test "N-Quads serialization is canonical and round trips stably" {
+    const input =
+        "<https://example.com/s><https://example.com/p>\"line\\nvalue\".\n" ++
+        "_:subject <https://example.com/p> \"42\"^^<http://www.w3.org/2001/XMLSchema#integer> _:graph .\n";
+    var first = try parseNQuads(std.testing.allocator, input);
+    defer first.deinit();
+    const serialized = try serializeNQuadsAlloc(std.testing.allocator, &first);
+    defer std.testing.allocator.free(serialized);
+
+    try std.testing.expectEqualStrings(
+        "<https://example.com/s> <https://example.com/p> \"line\\nvalue\" .\n" ++
+            "_:subject <https://example.com/p> \"42\"^^<http://www.w3.org/2001/XMLSchema#integer> _:graph .\n",
+        serialized,
+    );
+
+    var second = try parseNQuads(std.testing.allocator, serialized);
+    defer second.deinit();
+    const serialized_again = try serializeNQuadsAlloc(std.testing.allocator, &second);
+    defer std.testing.allocator.free(serialized_again);
+    try std.testing.expectEqualStrings(serialized, serialized_again);
+}
+
+fn exerciseNQuadsAllocations(allocator: std.mem.Allocator) !void {
+    var dataset = try parseNQuads(
+        allocator,
+        "_:s <https://example.com/p> \"Bun\\u0103\"@ro <https://example.com/g> .\n",
+    );
+    defer dataset.deinit();
+
+    const serialized = try serializeNQuadsAlloc(allocator, &dataset);
+    defer allocator.free(serialized);
+}
+
+test "N-Quads I/O handles every allocation failure without leaks" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseNQuadsAllocations,
         .{},
     );
 }
