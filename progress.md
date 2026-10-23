@@ -93,19 +93,22 @@ separate packages only after their APIs and release cycles become independently 
 - N-Quads parsing and canonical serialization reuse the validated N-Triples term grammar
   and support default, IRI-named, and blank-node-named graphs.
 - The local suite has 24 tests; all 70 official N-Triples syntax cases continue to pass.
+- The official W3C RDF 1.1 N-Quads manifest and its 87 referenced inputs are vendored
+  at revision `bfefa770267ec0e5b6e45764bbca4ee43789ba72` with provenance and license.
+- All 157 official N-Triples and N-Quads positive and negative syntax cases pass.
 
 ## Milestone status
 
 - Milestone 1 — project skeleton and conventions: complete.
 - Milestone 2 — RDF 1.1 data model: substantially complete; API review remains.
-- Milestone 3 — N-Triples and N-Quads: in progress.
+- Milestone 3 — N-Triples and N-Quads: complete.
 - Milestones 4–14: not started.
 
 ## Next actions
 
-1. Pin and run the official RDF 1.1 N-Quads syntax suite.
-2. Close any N-Quads grammar gaps exposed by the official manifest.
-3. Review and freeze the line-syntax public API and error surface.
+1. Review and freeze the RDF line-syntax public API and error surface.
+2. Design the shared lexer and IRI-resolution boundary for Turtle and TriG.
+3. Begin the Turtle parser with directives, prefixed names, and base IRI resolution.
 
 ## Session log
 
@@ -179,3 +182,13 @@ separate packages only after their APIs and release cycles become independently 
 - Added invalid graph-label, extra-term, byte-exact output, stable round-trip, and
   exhaustive allocation-failure coverage.
 - Retained a full pass of the official N-Triples syntax manifest.
+
+### 2026-10-24 — N-Quads conformance
+
+- Pinned and vendored the official RDF 1.1 N-Quads manifest and all 87 referenced
+  inputs at the same W3C test-repository revision as N-Triples.
+- Retained upstream provenance and the W3C test-suite license.
+- Extracted a shared manifest runner used by both line-syntax suites.
+- Ensured each input buffer is released immediately after its case completes.
+- Passed all 87 N-Quads and all 70 N-Triples official syntax cases.
+- Marked the N-Triples and N-Quads milestone complete.

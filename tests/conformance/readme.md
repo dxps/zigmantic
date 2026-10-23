@@ -15,9 +15,10 @@ The next suite is RDF 1.1 N-Quads:
 - Normative specification: <https://www.w3.org/TR/2014/REC-n-quads-20140225/>
 - Published test suite: <https://w3c.github.io/rdf-tests/rdf/rdf11/rdf-n-quads/>
 
-The RDF 1.1 N-Triples suite is pinned and imported under `rdf11-ntriples`. Its
-`UPSTREAM.md` records the exact revision and import scope. Imported files retain the
-upstream test-suite license and must not be modified to make tests pass.
+The RDF 1.1 N-Triples and N-Quads suites are pinned and imported under
+`rdf11-ntriples` and `rdf11-nquads`. Each `UPSTREAM.md` records the exact revision and
+import scope. Imported files retain the upstream test-suite license and must not be
+modified to make tests pass.
 
 `zig build test` runs every manifest entry and asserts the expected count, so a refresh
 cannot silently omit cases.
