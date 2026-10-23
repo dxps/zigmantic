@@ -75,7 +75,9 @@ separate packages only after their APIs and release cycles become independently 
   interning, compact term identifiers, borrowed views, triples, quads, graphs, datasets,
   RDF position validation, and set semantics.
 - 2026-10-23: Ownership and validation boundaries documented in `docs/architecture.md`.
-- Six RDF core tests pass under `zig build test`.
+- RDF term equality and deterministic hashing now work across independent term pools.
+- Graph and dataset pattern iterators provide allocation-free statement filtering.
+- Nine RDF core tests pass under `zig build test`.
 
 ## Milestone status
 
@@ -85,12 +87,10 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Complete RDF term comparison and hashing APIs, including comparisons across pools.
-2. Add graph and dataset iteration/filtering without exposing mutable statement storage.
-3. Expand constructor edge-case and allocation-failure tests.
-4. Add the official RDF test manifests to the conformance harness without yet vendoring
+1. Expand constructor edge-case and allocation-failure tests.
+2. Add the official RDF test manifests to the conformance harness without yet vendoring
    generated artifacts.
-5. Begin the N-Triples tokenizer only after the RDF data-model API is stable.
+3. Begin the N-Triples tokenizer only after the RDF data-model API is stable.
 
 ## Session log
 
@@ -113,3 +113,11 @@ separate packages only after their APIs and release cycles become independently 
 - Added an explicit public error set and six passing unit tests.
 - Added `docs/architecture.md` for durable ownership and API decisions.
 - Added a minimal package readme.
+
+### 2026-10-23 — RDF comparison and iteration
+
+- Added value-based term equality across independent term pools.
+- Added deterministic term hashing consistent with term equality.
+- Added allocation-free triple and quad pattern iterators.
+- Documented identifier and pattern-matching semantics.
+- Added three focused unit tests.

@@ -16,6 +16,11 @@ the same numeric value remain distinct RDF terms.
 `TermPool.view` returns borrowed slices. They remain valid until the owning pool is
 deinitialized. Public APIs do not transfer ownership implicitly.
 
+`TermId` equality is meaningful only within one pool. `TermPool.eqlTerm` and
+`TermPool.hashTerm` operate on RDF term values and therefore provide the explicit path
+for comparison and hashing across pools. Hashes are deterministic and do not expose
+the internal string or term indices.
+
 ## Graph and dataset semantics
 
 `Graph` and `Dataset` each own a term pool and statement storage. Their `add` operations
@@ -30,6 +35,10 @@ enforce RDF position constraints and set semantics:
 Storage is intentionally linear during the data-model milestone. Indexed statement
 storage belongs to the later store milestone and can replace these containers without
 changing RDF term ownership or equality.
+
+Graphs and datasets provide allocation-free pattern iterators. A null pattern field is
+a wildcard; a non-null field requires exact pool-local identifier equality. Dataset
+graph patterns distinguish the default graph from a named graph.
 
 ## Validation boundaries
 

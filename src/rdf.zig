@@ -142,6 +142,63 @@ pub const TermPool = struct {
         return self.terms.items.len;
     }
 
+    /// Compares RDF terms by value, including when their identifiers belong to
+    /// different pools.
+    pub fn eqlTerm(
+        self: *const TermPool,
+        id: TermId,
+        other: *const TermPool,
+        other_id: TermId,
+    ) Error!bool {
+        const left = self.view(id) orelse return error.UnknownTerm;
+        const right = other.view(other_id) orelse return error.UnknownTerm;
+
+        return switch (left) {
+            .named_node => |value| switch (right) {
+                .named_node => |other_value| std.mem.eql(u8, value, other_value),
+                else => false,
+            },
+            .blank_node => |value| switch (right) {
+                .blank_node => |other_value| std.mem.eql(u8, value, other_value),
+                else => false,
+            },
+            .literal => |value| switch (right) {
+                .literal => |other_value| literalViewEql(value, other_value),
+                else => false,
+            },
+        };
+    }
+
+    /// Returns a deterministic hash of the RDF term value. Equal terms from
+    /// different pools have the same hash.
+    pub fn hashTerm(self: *const TermPool, id: TermId) Error!u64 {
+        const value = self.view(id) orelse return error.UnknownTerm;
+        var hash = Fnv1a64.init;
+
+        switch (value) {
+            .named_node => |iri| {
+                hash.addByte(0);
+                hash.addSlice(iri);
+            },
+            .blank_node => |identifier| {
+                hash.addByte(1);
+                hash.addSlice(identifier);
+            },
+            .literal => |literal| {
+                hash.addByte(2);
+                hash.addSlice(literal.lexical_form);
+                hash.addSlice(literal.datatype);
+                if (literal.language) |language| {
+                    hash.addByte(1);
+                    hash.addSlice(language);
+                } else {
+                    hash.addByte(0);
+                }
+            },
+        }
+        return hash.value;
+    }
+
     fn string(self: *const TermPool, id: StringId) ?[]const u8 {
         const index: usize = @backingInt(id);
         if (index >= self.strings.items.len) return null;
@@ -178,6 +235,33 @@ pub const Triple = struct {
     object: TermId,
 };
 
+pub const TriplePattern = struct {
+    subject: ?TermId = null,
+    predicate: ?TermId = null,
+    object: ?TermId = null,
+
+    fn matches(self: TriplePattern, triple: Triple) bool {
+        return (self.subject == null or self.subject.? == triple.subject) and
+            (self.predicate == null or self.predicate.? == triple.predicate) and
+            (self.object == null or self.object.? == triple.object);
+    }
+};
+
+pub const TripleIterator = struct {
+    triples: []const Triple,
+    pattern: TriplePattern,
+    index: usize = 0,
+
+    pub fn next(self: *TripleIterator) ?Triple {
+        while (self.index < self.triples.len) {
+            const triple = self.triples[self.index];
+            self.index += 1;
+            if (self.pattern.matches(triple)) return triple;
+        }
+        return null;
+    }
+};
+
 pub const GraphName = union(enum) {
     default,
     named: TermId,
@@ -188,6 +272,35 @@ pub const Quad = struct {
     predicate: TermId,
     object: TermId,
     graph_name: GraphName = .default,
+};
+
+pub const QuadPattern = struct {
+    subject: ?TermId = null,
+    predicate: ?TermId = null,
+    object: ?TermId = null,
+    graph_name: ?GraphName = null,
+
+    fn matches(self: QuadPattern, quad: Quad) bool {
+        return (self.subject == null or self.subject.? == quad.subject) and
+            (self.predicate == null or self.predicate.? == quad.predicate) and
+            (self.object == null or self.object.? == quad.object) and
+            (self.graph_name == null or std.meta.eql(self.graph_name.?, quad.graph_name));
+    }
+};
+
+pub const QuadIterator = struct {
+    quads: []const Quad,
+    pattern: QuadPattern,
+    index: usize = 0,
+
+    pub fn next(self: *QuadIterator) ?Quad {
+        while (self.index < self.quads.len) {
+            const quad = self.quads[self.index];
+            self.index += 1;
+            if (self.pattern.matches(quad)) return quad;
+        }
+        return null;
+    }
 };
 
 pub const Graph = struct {
@@ -230,6 +343,10 @@ pub const Graph = struct {
 
     pub fn items(self: *const Graph) []const Triple {
         return self.triples.items;
+    }
+
+    pub fn iterator(self: *const Graph, pattern: TriplePattern) TripleIterator {
+        return .{ .triples = self.triples.items, .pattern = pattern };
     }
 };
 
@@ -288,7 +405,38 @@ pub const Dataset = struct {
     pub fn items(self: *const Dataset) []const Quad {
         return self.quads.items;
     }
+
+    pub fn iterator(self: *const Dataset, pattern: QuadPattern) QuadIterator {
+        return .{ .quads = self.quads.items, .pattern = pattern };
+    }
 };
+
+const Fnv1a64 = struct {
+    const init: Fnv1a64 = .{};
+    const prime: u64 = 0x00000100000001B3;
+
+    value: u64 = 0xCBF29CE484222325,
+
+    fn addByte(self: *Fnv1a64, byte: u8) void {
+        self.value = (self.value ^ byte) *% prime;
+    }
+
+    fn addSlice(self: *Fnv1a64, value: []const u8) void {
+        var length: u64 = @intCast(value.len);
+        for (0..@sizeOf(u64)) |_| {
+            self.addByte(@truncate(length));
+            length >>= 8;
+        }
+        for (value) |byte| self.addByte(byte);
+    }
+};
+
+fn literalViewEql(left: LiteralView, right: LiteralView) bool {
+    if (!std.mem.eql(u8, left.lexical_form, right.lexical_form)) return false;
+    if (!std.mem.eql(u8, left.datatype, right.datatype)) return false;
+    if (left.language == null or right.language == null) return left.language == null and right.language == null;
+    return std.mem.eql(u8, left.language.?, right.language.?);
+}
 
 fn validateTriple(pool: *const TermPool, triple: Triple) Error!void {
     const subject = pool.get(triple.subject) orelse return error.UnknownTerm;
@@ -394,6 +542,29 @@ test "simple and language literals have their RDF 1.1 datatypes" {
     try std.testing.expectEqualStrings("ro-latn", language_view.language.?);
 }
 
+test "term equality and hashing are stable across pools" {
+    var left = TermPool.init(std.testing.allocator);
+    defer left.deinit();
+    var right = TermPool.init(std.testing.allocator);
+    defer right.deinit();
+
+    const left_iri = try left.internNamedNode("https://example.com/resource");
+    const right_iri = try right.internNamedNode("https://example.com/resource");
+    const blank = try right.internBlankNode("https://example.com/resource");
+    try std.testing.expect(try left.eqlTerm(left_iri, &right, right_iri));
+    try std.testing.expect(!(try left.eqlTerm(left_iri, &right, blank)));
+    try std.testing.expectEqual(try left.hashTerm(left_iri), try right.hashTerm(right_iri));
+
+    const left_literal = try left.internLanguageLiteral("salut", "RO");
+    const right_literal = try right.internLanguageLiteral("salut", "ro");
+    try std.testing.expect(try left.eqlTerm(left_literal, &right, right_literal));
+    try std.testing.expectEqual(try left.hashTerm(left_literal), try right.hashTerm(right_literal));
+
+    const unknown: TermId = @fromBackingInt(999);
+    try std.testing.expectError(error.UnknownTerm, left.hashTerm(unknown));
+    try std.testing.expectError(error.UnknownTerm, left.eqlTerm(unknown, &right, right_iri));
+}
+
 test "term constructors reject structurally invalid values" {
     var pool = TermPool.init(std.testing.allocator);
     defer pool.deinit();
@@ -430,6 +601,26 @@ test "graph has set semantics and validates triple positions" {
     }));
 }
 
+test "graph iterator filters without allocating" {
+    var graph = Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    const alice = try graph.terms.internNamedNode("https://example.com/alice");
+    const bob = try graph.terms.internNamedNode("https://example.com/bob");
+    const name = try graph.terms.internNamedNode("https://example.com/name");
+    const alice_name = try graph.terms.internSimpleLiteral("Alice");
+    const bob_name = try graph.terms.internSimpleLiteral("Bob");
+    _ = try graph.add(.{ .subject = alice, .predicate = name, .object = alice_name });
+    _ = try graph.add(.{ .subject = bob, .predicate = name, .object = bob_name });
+
+    var matches = graph.iterator(.{ .subject = alice });
+    try std.testing.expectEqual(
+        Triple{ .subject = alice, .predicate = name, .object = alice_name },
+        matches.next().?,
+    );
+    try std.testing.expectEqual(@as(?Triple, null), matches.next());
+}
+
 test "dataset supports default, IRI-named, and blank-node-named graphs" {
     var dataset = Dataset.init(std.testing.allocator);
     defer dataset.deinit();
@@ -463,4 +654,30 @@ test "dataset supports default, IRI-named, and blank-node-named graphs" {
         .object = object,
         .graph_name = .{ .named = literal },
     }));
+}
+
+test "dataset iterator distinguishes default and named graphs" {
+    var dataset = Dataset.init(std.testing.allocator);
+    defer dataset.deinit();
+
+    const subject = try dataset.terms.internNamedNode("https://example.com/subject");
+    const predicate = try dataset.terms.internNamedNode("https://example.com/predicate");
+    const object = try dataset.terms.internSimpleLiteral("object");
+    const graph_name = try dataset.terms.internNamedNode("https://example.com/graph");
+    const triple = Triple{ .subject = subject, .predicate = predicate, .object = object };
+    _ = try dataset.addDefault(triple);
+    _ = try dataset.add(.{
+        .subject = subject,
+        .predicate = predicate,
+        .object = object,
+        .graph_name = .{ .named = graph_name },
+    });
+
+    var default_matches = dataset.iterator(.{ .graph_name = .default });
+    try std.testing.expectEqual(GraphName.default, default_matches.next().?.graph_name);
+    try std.testing.expectEqual(@as(?Quad, null), default_matches.next());
+
+    var named_matches = dataset.iterator(.{ .graph_name = .{ .named = graph_name } });
+    try std.testing.expectEqual(GraphName{ .named = graph_name }, named_matches.next().?.graph_name);
+    try std.testing.expectEqual(@as(?Quad, null), named_matches.next());
 }
