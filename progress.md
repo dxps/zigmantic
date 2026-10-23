@@ -100,19 +100,27 @@ separate packages only after their APIs and release cycles become independently 
   error guarantees in `docs/api.md`.
 - The public `iri` module implements allocator-owned RFC 3986/3987 relative IRI
   resolution and passes the RFC normal and abnormal example tables.
+- The first Turtle parser slice supports both Turtle and SPARQL-style base/prefix
+  directives, relative IRI references, prefixed names, `a`, comments, and simple
+  resource-only triples.
+- The local suite has 32 tests; all 157 official N-Triples and N-Quads syntax cases
+  continue to pass. Turtle conformance is not yet claimed.
 
 ## Milestone status
 
 - Milestone 1 — project skeleton and conventions: complete.
 - Milestone 2 — RDF 1.1 data model: substantially complete; API review remains.
 - Milestone 3 — N-Triples and N-Quads: complete.
-- Milestones 4–14: not started.
+- Milestone 4 — Turtle and TriG: in progress; Turtle directive and IRI foundation is
+  implemented.
+- Milestones 5–14: not started.
 
 ## Next actions
 
-1. Design the shared lexer boundary for Turtle and TriG.
-2. Begin the Turtle parser with `@base`, `@prefix`, `BASE`, and `PREFIX` directives.
-3. Add IRI references and prefixed names using the shared resolver.
+1. Add Turtle literals, blank nodes, and complete prefixed-name grammar coverage.
+2. Add predicate/object lists, blank-node property lists, and RDF collections.
+3. Pin the official Turtle suite and drive the parser to full syntax/evaluation
+   conformance before adding serialization and TriG graph syntax.
 
 ## Session log
 
@@ -217,3 +225,18 @@ separate packages only after their APIs and release cycles become independently 
   dereferencing or optional normalization.
 - Covered the RFC 3986 normal and abnormal resolution examples, Unicode IRIs, invalid
   bases and references, malformed UTF-8, and exhaustive allocation failures.
+
+### 2026-10-24 — Turtle directive and IRI foundation
+
+- Added an allocator-owned `parseTurtle` API with an optional external base IRI.
+- Established lexer tokens for comments, directives, IRI references, prefixed names,
+  `a`, statement terminators, and end of input.
+- Implemented `@base`/`@prefix` and case-insensitive `BASE`/`PREFIX` directives.
+- Resolved relative references through the shared RFC 3986/3987 IRI module and expanded
+  default and named prefixes.
+- Parsed simple resource-only triples, including the `a` shorthand for `rdf:type`.
+- Added invalid-directive, unresolved-name, external-base, and exhaustive
+  allocation-failure tests.
+- Passed all 32 local tests and retained all 157 official N-Triples/N-Quads cases.
+- Kept the API and documentation explicit that this is an incremental subset, not a
+  Turtle conformance claim.

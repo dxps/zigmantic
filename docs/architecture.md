@@ -65,3 +65,8 @@ other syntaxes share the same operation. It implements the RFC 3986 section 5.2 
 dot-segment algorithm, applied directly to Unicode IRI references as specified by RFC
 3987 section 6.5. Resolution preserves Unicode and percent-escape spelling and performs
 no dereferencing or optional normalization.
+
+The incremental Turtle parser keeps base and prefix mappings as parser-owned state and
+uses the shared `iri` module for every relative IRI. Its lexer establishes the token
+boundary that Turtle and TriG can share as their grammars are completed. Parser state is
+temporary; only fully interned RDF terms survive in the returned graph.

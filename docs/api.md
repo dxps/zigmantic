@@ -6,6 +6,7 @@
   `deinit` with the same allocator lifetime used at construction.
 - `rdf_io.parseNTriples` returns an owned `rdf.Graph`.
 - `rdf_io.parseNQuads` returns an owned `rdf.Dataset`.
+- `rdf_io.parseTurtle` returns an owned `rdf.Graph`.
 - `rdf_io.serializeNTriplesAlloc` and `rdf_io.serializeNQuadsAlloc` return owned byte
   slices that the caller frees with the allocator passed to the function.
 - Term views and statement slices are borrowed and remain valid only while their owner
@@ -30,6 +31,19 @@ They do not sort statements, relabel blank nodes, or perform RDF graph canonical
 
 Streaming parsers and writers may be added later as separate APIs. Their addition must
 not change the ownership or output guarantees of these whole-document functions.
+
+## Turtle
+
+`parseTurtle(allocator, input, options)` currently implements the first incremental
+Turtle parser slice. `TurtleOptions.base_iri` supplies the optional retrieval or
+containing-document base. The parser supports `@base`, `@prefix`, `BASE`, and `PREFIX`
+directives; relative IRI references; default and named prefixed names; `a`; comments;
+and simple resource-only triples.
+
+The returned graph owns all parsed terms and follows the same lifetime and error rules
+as `parseNTriples`. The current API is deliberately marked as a subset: literals, blank
+nodes, predicate/object lists, collections, and the official Turtle conformance suite
+remain before Turtle conformance can be claimed.
 
 ## IRI references
 

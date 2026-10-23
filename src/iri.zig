@@ -12,6 +12,12 @@ pub const ResolveError = std.mem.Allocator.Error || error{
     InvalidUtf8,
 };
 
+/// Returns whether `value` is a structurally valid absolute IRI reference.
+pub fn isAbsolute(value: []const u8) bool {
+    const components = parseReference(value) catch return false;
+    return components.scheme != null;
+}
+
 /// Resolves `reference` against an absolute `base` and returns owned UTF-8.
 /// This performs reference resolution, not IRI normalization.
 pub fn resolveAlloc(
