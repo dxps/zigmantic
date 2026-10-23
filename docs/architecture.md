@@ -70,3 +70,8 @@ The incremental Turtle parser keeps base and prefix mappings as parser-owned sta
 uses the shared `iri` module for every relative IRI. Its lexer establishes the token
 boundary that Turtle and TriG can share as their grammars are completed. Parser state is
 temporary; only fully interned RDF terms survive in the returned graph.
+
+Turtle predicate and object lists are expanded while parsing and do not require an
+intermediate syntax tree. Empty `[]` forms allocate fresh blank nodes. Generated labels
+are tracked separately from source labels so an explicit label can never alias an
+anonymous node, including when its spelling matches the internal generation pattern.

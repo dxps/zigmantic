@@ -19,8 +19,9 @@ pub const TurtleOptions = struct {
 };
 
 /// Parses the currently implemented RDF 1.1 Turtle subset into an owned graph.
-/// Directives, resources, labeled blank nodes, and RDF literal forms are supported.
-/// Predicate/object lists and structural blank-node forms are added incrementally.
+/// Directives, resources, RDF literal forms, labeled and anonymous blank nodes, and
+/// predicate/object lists are supported. Property lists and collections are added
+/// incrementally.
 pub fn parseTurtle(
     allocator: std.mem.Allocator,
     input: []const u8,
@@ -174,6 +175,10 @@ const TurtleToken = struct {
         double,
         boolean,
         keyword_a,
+        semicolon,
+        comma,
+        left_bracket,
+        right_bracket,
         dot,
         eof,
     };
@@ -197,6 +202,22 @@ const TurtleLexer = struct {
                 }
                 self.index += 1;
                 return .{ .tag = .dot, .lexeme = self.input[start..self.index] };
+            },
+            ';' => {
+                self.index += 1;
+                return .{ .tag = .semicolon, .lexeme = self.input[start..self.index] };
+            },
+            ',' => {
+                self.index += 1;
+                return .{ .tag = .comma, .lexeme = self.input[start..self.index] };
+            },
+            '[' => {
+                self.index += 1;
+                return .{ .tag = .left_bracket, .lexeme = self.input[start..self.index] };
+            },
+            ']' => {
+                self.index += 1;
+                return .{ .tag = .right_bracket, .lexeme = self.input[start..self.index] };
             },
             '"', '\'' => return self.scanString(),
             '^' => {
@@ -332,8 +353,11 @@ const TurtleParser = struct {
     lexer: TurtleLexer,
     arena: std.heap.ArenaAllocator,
     prefixes: std.StringHashMapUnmanaged([]const u8) = .empty,
+    labeled_blank_nodes: std.StringHashMapUnmanaged(rdf.TermId) = .empty,
+    generated_blank_labels: std.StringHashMapUnmanaged(void) = .empty,
     base_iri: ?[]const u8 = null,
     lookahead: ?TurtleToken = null,
+    next_blank_node: usize = 0,
 
     fn init(
         allocator: std.mem.Allocator,
@@ -354,6 +378,8 @@ const TurtleParser = struct {
     }
 
     fn deinit(self: *TurtleParser) void {
+        self.generated_blank_labels.deinit(self.allocator);
+        self.labeled_blank_nodes.deinit(self.allocator);
         self.prefixes.deinit(self.allocator);
         self.arena.deinit();
         self.* = undefined;
@@ -368,7 +394,7 @@ const TurtleParser = struct {
                 .base => try self.parseBaseDirective(false),
                 .at_prefix => try self.parsePrefixDirective(true),
                 .prefix => try self.parsePrefixDirective(false),
-                .iri_ref, .prefixed_name, .blank_node_label => try self.parseTriple(graph, first),
+                .iri_ref, .prefixed_name, .blank_node_label, .left_bracket => try self.parseTriple(graph, first),
                 else => return error.InvalidSyntax,
             }
         }
@@ -411,13 +437,39 @@ const TurtleParser = struct {
         subject_token: TurtleToken,
     ) ParseError!void {
         const subject = try self.parseSubject(&graph.terms, subject_token);
-        const predicate_token = try self.nextToken();
-        const predicate = if (predicate_token.tag == .keyword_a)
-            graph.terms.internNamedNode(rdf.rdf_namespace ++ "type") catch |err| return mapTermError(err)
-        else
-            try self.parseResource(&graph.terms, predicate_token);
-        const object = try self.parseObject(&graph.terms, try self.nextToken());
-        try self.expect(.dot);
+        var predicate_token = try self.nextToken();
+
+        while (true) {
+            const predicate = if (predicate_token.tag == .keyword_a)
+                graph.terms.internNamedNode(rdf.rdf_namespace ++ "type") catch |err| return mapTermError(err)
+            else
+                try self.parseResource(&graph.terms, predicate_token);
+
+            var separator: TurtleToken = undefined;
+            while (true) {
+                const object = try self.parseObject(&graph.terms, try self.nextToken());
+                try self.addTriple(graph, subject, predicate, object);
+                separator = try self.nextToken();
+                if (separator.tag != .comma) break;
+            }
+
+            if (separator.tag == .dot) return;
+            if (separator.tag != .semicolon) return error.InvalidSyntax;
+
+            while (separator.tag == .semicolon) separator = try self.nextToken();
+            if (separator.tag == .dot) return;
+            predicate_token = separator;
+        }
+    }
+
+    fn addTriple(
+        self: *TurtleParser,
+        graph: *rdf.Graph,
+        subject: rdf.TermId,
+        predicate: rdf.TermId,
+        object: rdf.TermId,
+    ) ParseError!void {
+        _ = self;
         _ = graph.add(.{
             .subject = subject,
             .predicate = predicate,
@@ -431,6 +483,7 @@ const TurtleParser = struct {
         token: TurtleToken,
     ) ParseError!rdf.TermId {
         if (token.tag == .blank_node_label) return self.parseBlankNode(pool, token.lexeme);
+        if (token.tag == .left_bracket) return self.parseAnonymousBlankNode(pool);
         return self.parseResource(pool, token);
     }
 
@@ -441,6 +494,7 @@ const TurtleParser = struct {
     ) ParseError!rdf.TermId {
         return switch (token.tag) {
             .blank_node_label => self.parseBlankNode(pool, token.lexeme),
+            .left_bracket => self.parseAnonymousBlankNode(pool),
             .string_literal => self.parseStringLiteral(pool, token.lexeme),
             .integer => self.parseTypedLiteral(pool, token.lexeme, rdf.xsd_namespace ++ "integer"),
             .decimal => self.parseTypedLiteral(pool, token.lexeme, rdf.xsd_namespace ++ "decimal"),
@@ -455,9 +509,43 @@ const TurtleParser = struct {
         pool: *rdf.TermPool,
         label: []const u8,
     ) ParseError!rdf.TermId {
-        _ = self;
         if (!isNTriplesBlankLabel(label)) return error.InvalidSyntax;
-        return pool.internBlankNode(label) catch |err| return mapTermError(err);
+        if (self.labeled_blank_nodes.get(label)) |id| return id;
+
+        const id = if (self.generated_blank_labels.contains(label))
+            try self.freshBlankNode(pool)
+        else
+            pool.internBlankNode(label) catch |err| return mapTermError(err);
+        try self.labeled_blank_nodes.put(self.allocator, label, id);
+        return id;
+    }
+
+    fn parseAnonymousBlankNode(
+        self: *TurtleParser,
+        pool: *rdf.TermPool,
+    ) ParseError!rdf.TermId {
+        try self.expect(.right_bracket);
+        return self.freshBlankNode(pool);
+    }
+
+    fn freshBlankNode(self: *TurtleParser, pool: *rdf.TermPool) ParseError!rdf.TermId {
+        while (true) {
+            var buffer: [64]u8 = undefined;
+            const label = std.fmt.bufPrint(
+                &buffer,
+                "zigmantic-anon-{d}",
+                .{self.next_blank_node},
+            ) catch unreachable;
+            self.next_blank_node += 1;
+
+            const term_count = pool.count();
+            const id = pool.internBlankNode(label) catch |err| return mapTermError(err);
+            if (pool.count() == term_count) continue;
+
+            const stored_label = pool.view(id).?.blank_node;
+            try self.generated_blank_labels.put(self.allocator, stored_label, {});
+            return id;
+        }
     }
 
     fn parseStringLiteral(
@@ -1407,6 +1495,53 @@ test "Turtle parses labeled blank-node subjects and objects" {
     );
 }
 
+test "Turtle expands predicate and object lists" {
+    const input =
+        "@prefix ex: <https://example.com/> .\n" ++
+        "ex:s ex:p ex:first, \"second\", [] ;\n" ++
+        "     ex:number 1, 2 ;\n" ++
+        "     a ex:Thing ;; .\n";
+    var graph = try parseTurtle(std.testing.allocator, input, .{});
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 6), graph.len());
+    const subject = graph.items()[0].subject;
+    for (graph.items()) |triple| try std.testing.expectEqual(subject, triple.subject);
+
+    try std.testing.expectEqualStrings(
+        "https://example.com/first",
+        graph.terms.view(graph.items()[0].object).?.named_node,
+    );
+    try std.testing.expectEqualStrings(
+        "second",
+        graph.terms.view(graph.items()[1].object).?.literal.lexical_form,
+    );
+    _ = graph.terms.view(graph.items()[2].object).?.blank_node;
+    try std.testing.expectEqualStrings(
+        rdf.rdf_namespace ++ "type",
+        graph.terms.view(graph.items()[5].predicate).?.named_node,
+    );
+}
+
+test "Turtle creates distinct collision-safe anonymous blank nodes" {
+    const input =
+        "@prefix ex: <https://example.com/> .\n" ++
+        "[] ex:p ex:first .\n" ++
+        "_:zigmantic-anon-0 ex:p ex:labeled .\n" ++
+        "_:zigmantic-anon-0 ex:q [] .\n";
+    var graph = try parseTurtle(std.testing.allocator, input, .{});
+    defer graph.deinit();
+
+    const first_anonymous = graph.items()[0].subject;
+    const labeled = graph.items()[1].subject;
+    const repeated_labeled = graph.items()[2].subject;
+    const second_anonymous = graph.items()[2].object;
+    try std.testing.expect(first_anonymous != labeled);
+    try std.testing.expectEqual(labeled, repeated_labeled);
+    try std.testing.expect(second_anonymous != first_anonymous);
+    try std.testing.expect(second_anonymous != labeled);
+}
+
 test "Turtle rejects invalid directives and unresolved names" {
     const invalid = [_][]const u8{
         "<relative> <https://example.com/p> <https://example.com/o> .",
@@ -1420,6 +1555,10 @@ test "Turtle rejects invalid directives and unresolved names" {
         "@prefix ex: <https://example.com/> . ex:s ex:p \"value\"^^_:datatype .",
         "@prefix ex: <https://example.com/> . ex:s ex:p _:bad/label .",
         "@prefix ex: <https://example.com/> . \"literal\" ex:p ex:o .",
+        "@prefix ex: <https://example.com/> . ex:s ex:p ex:o, .",
+        "@prefix ex: <https://example.com/> . ex:s ex:p ex:o; , ex:q .",
+        "@prefix ex: <https://example.com/> . [ ex:p ex:o ] ex:q ex:r .",
+        "@prefix ex: <https://example.com/> . ex:s ex:p [ .",
     };
     for (invalid) |input| {
         try std.testing.expectError(
@@ -1433,7 +1572,7 @@ fn exerciseTurtleAllocations(allocator: std.mem.Allocator) !void {
     var graph = try parseTurtle(
         allocator,
         "@base <https://example.com/> . @prefix ex: <vocab/> . " ++
-            "_:s ex:name \"Bună\\nziua\"@ro .",
+            "[] ex:name \"Bună\\nziua\"@ro, \"Salut\" ; a ex:Thing .",
         .{},
     );
     defer graph.deinit();

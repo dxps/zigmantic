@@ -106,7 +106,10 @@ separate packages only after their APIs and release cycles become independently 
 - Turtle now supports labeled blank nodes; short and long single- or double-quoted
   strings; language and explicit datatype suffixes; and native integer, decimal,
   double, and boolean literals.
-- The local suite has 35 tests; all 157 official N-Triples and N-Quads syntax cases
+- Predicate lists, object lists, trailing predicate separators, and empty anonymous
+  blank nodes now expand directly into graph triples. Anonymous-node allocation is
+  collision-safe with source blank-node labels.
+- The local suite has 37 tests; all 157 official N-Triples and N-Quads syntax cases
   continue to pass. Turtle conformance is not yet claimed.
 
 ## Milestone status
@@ -120,9 +123,8 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Add predicate/object lists and anonymous blank nodes.
-2. Add blank-node property lists, RDF collections, and complete prefixed-name grammar
-   coverage.
+1. Add non-empty blank-node property lists and nested structures.
+2. Add RDF collections and complete prefixed-name grammar coverage.
 3. Pin the official Turtle suite and drive the parser to full syntax/evaluation
    conformance before adding serialization and TriG graph syntax.
 
@@ -257,3 +259,16 @@ separate packages only after their APIs and release cycles become independently 
 - Added semantic term-value checks, malformed-input cases, and allocation-failure
   coverage for the new forms.
 - Passed all 35 local tests and retained all 157 official N-Triples/N-Quads cases.
+
+### 2026-10-24 — Turtle lists and anonymous blank nodes
+
+- Added predicate lists separated by `;`, including repeated trailing separators.
+- Added comma-separated object lists and emitted their Cartesian statement expansion in
+  source order.
+- Added empty `[]` blank nodes in subject and object positions.
+- Made generated blank-node identifiers collision-safe with explicit source labels,
+  including labels that match the internal generation pattern.
+- Reused one subject across every expanded statement and preserved graph set semantics.
+- Added malformed-list, unsupported-property-list, identity, expansion-order, and
+  allocation-failure coverage.
+- Passed all 37 local tests and retained all 157 official N-Triples/N-Quads cases.
