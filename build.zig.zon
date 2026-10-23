@@ -1,0 +1,15 @@
+.{
+    .name = .zigmantic,
+    .version = "0.1.0-dev",
+    .fingerprint = 0xfa8c76d713b62dde, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "docs",
+        "readme.md",
+        "src",
+        "progress.md",
+    },
+}

@@ -70,16 +70,27 @@ separate packages only after their APIs and release cycles become independently 
 
 - 2026-10-23: Standalone project directory identified as the implementation target.
 - 2026-10-23: Initial scope and roadmap recorded.
-- Implementation has not started.
+- 2026-10-23: Zig 0.17.0 package and test scaffolding implemented.
+- 2026-10-23: Initial RDF 1.1 core model implemented with dataset-owned string and term
+  interning, compact term identifiers, borrowed views, triples, quads, graphs, datasets,
+  RDF position validation, and set semantics.
+- 2026-10-23: Ownership and validation boundaries documented in `docs/architecture.md`.
+- Six RDF core tests pass under `zig build test`.
+
+## Milestone status
+
+- Milestone 1 — project skeleton and conventions: complete.
+- Milestone 2 — RDF 1.1 data model: in progress.
+- Milestones 3–14: not started.
 
 ## Next actions
 
-1. Create `build.zig`, `build.zig.zon`, and the module/test skeleton for Zig 0.17.0.
-2. Write the RDF term ownership and interning design before fixing the public API.
-3. Implement IRIs, blank nodes, literals, variables where applicable, triples, quads,
-   graph names, graphs, and datasets.
+1. Complete RDF term comparison and hashing APIs, including comparisons across pools.
+2. Add graph and dataset iteration/filtering without exposing mutable statement storage.
+3. Expand constructor edge-case and allocation-failure tests.
 4. Add the official RDF test manifests to the conformance harness without yet vendoring
    generated artifacts.
+5. Begin the N-Triples tokenizer only after the RDF data-model API is stable.
 
 ## Session log
 
@@ -91,3 +102,14 @@ separate packages only after their APIs and release cycles become independently 
 - Deferred RDF/XML and RDF/SPARQL 1.2 until the core 1.1 implementation is stable.
 - Confirmed that `zigmantic` is a standalone repository with no source dependency on
   another project repository.
+
+### 2026-10-23 — Initial implementation
+
+- Added the Zig 0.17.0 package manifest and build/test graph.
+- Added the public `zigmantic` module and initial `rdf` module.
+- Implemented allocator-owned term interning with `TermId` handles and borrowed views.
+- Implemented RDF 1.1 literal invariants for `xsd:string` and `rdf:langString`.
+- Implemented triples, quads, graphs, datasets, named graphs, validation, and set semantics.
+- Added an explicit public error set and six passing unit tests.
+- Added `docs/architecture.md` for durable ownership and API decisions.
+- Added a minimal package readme.
