@@ -4,6 +4,10 @@ const std = @import("std");
 const rdf = @import("rdf.zig");
 
 pub const Error = rdf.Error || error{InvalidSyntax};
+pub const SerializeError = std.mem.Allocator.Error || error{
+    InvalidNTriplesTerm,
+    UnknownTerm,
+};
 
 /// Parses one complete RDF 1.1 N-Triples document into an owned graph.
 pub fn parseNTriples(allocator: std.mem.Allocator, input: []const u8) Error!rdf.Graph {
@@ -15,6 +19,73 @@ pub fn parseNTriples(allocator: std.mem.Allocator, input: []const u8) Error!rdf.
     var parser = NTriplesParser{ .allocator = allocator, .input = input };
     try parser.parseInto(&graph);
     return graph;
+}
+
+/// Serializes a graph using the canonical RDF 1.1 N-Triples layout.
+/// Triple order follows graph iteration order; this function does not perform
+/// RDF graph canonicalization or blank-node relabeling.
+pub fn serializeNTriplesAlloc(
+    allocator: std.mem.Allocator,
+    graph: *const rdf.Graph,
+) SerializeError![]u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+
+    for (graph.items()) |triple| {
+        try appendTerm(allocator, &output, &graph.terms, triple.subject);
+        try output.append(allocator, ' ');
+        try appendTerm(allocator, &output, &graph.terms, triple.predicate);
+        try output.append(allocator, ' ');
+        try appendTerm(allocator, &output, &graph.terms, triple.object);
+        try output.appendSlice(allocator, " .\n");
+    }
+    return output.toOwnedSlice(allocator);
+}
+
+fn appendTerm(
+    allocator: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    pool: *const rdf.TermPool,
+    id: rdf.TermId,
+) SerializeError!void {
+    const term = pool.view(id) orelse return error.UnknownTerm;
+    switch (term) {
+        .named_node => |iri| try appendIri(allocator, output, iri),
+        .blank_node => |identifier| {
+            if (!isNTriplesBlankLabel(identifier)) return error.InvalidNTriplesTerm;
+            try output.appendSlice(allocator, "_:");
+            try output.appendSlice(allocator, identifier);
+        },
+        .literal => |literal| {
+            try output.append(allocator, '"');
+            for (literal.lexical_form) |byte| switch (byte) {
+                '"' => try output.appendSlice(allocator, "\\\""),
+                '\\' => try output.appendSlice(allocator, "\\\\"),
+                '\n' => try output.appendSlice(allocator, "\\n"),
+                '\r' => try output.appendSlice(allocator, "\\r"),
+                else => try output.append(allocator, byte),
+            };
+            try output.append(allocator, '"');
+
+            if (literal.language) |language| {
+                try output.append(allocator, '@');
+                try output.appendSlice(allocator, language);
+            } else if (!std.mem.eql(u8, literal.datatype, rdf.xsd_string)) {
+                try output.appendSlice(allocator, "^^");
+                try appendIri(allocator, output, literal.datatype);
+            }
+        },
+    }
+}
+
+fn appendIri(
+    allocator: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    iri: []const u8,
+) std.mem.Allocator.Error!void {
+    try output.append(allocator, '<');
+    try output.appendSlice(allocator, iri);
+    try output.append(allocator, '>');
 }
 
 const NTriplesParser = struct {
@@ -95,16 +166,20 @@ const NTriplesParser = struct {
         try self.expect('_');
         try self.expect(':');
         const start = self.index;
-        const first = self.peek() orelse return error.InvalidSyntax;
-        if (!isBlankFirst(first)) return error.InvalidSyntax;
-        self.index += 1;
+        const first_length = blankCharacterLength(self.input, self.index, true) orelse
+            return error.InvalidSyntax;
+        self.index += first_length;
 
-        while (self.peek()) |byte| {
-            if (!isBlankRest(byte)) break;
-            self.index += 1;
+        while (!self.atEnd()) {
+            if (self.input[self.index] == '.') {
+                self.index += 1;
+                continue;
+            }
+            const length = blankCharacterLength(self.input, self.index, false) orelse break;
+            self.index += length;
         }
         if (self.input[self.index - 1] == '.') self.index -= 1;
-        if (self.index == start) return error.InvalidSyntax;
+        if (self.index == start or self.input[self.index - 1] == '.') return error.InvalidSyntax;
         return pool.internBlankNode(self.input[start..self.index]) catch |err| return mapTermError(err);
     }
 
@@ -269,12 +344,50 @@ const NTriplesParser = struct {
     }
 };
 
-fn isBlankFirst(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte >= 0x80;
+fn isNTriplesBlankLabel(identifier: []const u8) bool {
+    if (!std.unicode.utf8ValidateSlice(identifier) or identifier.len == 0) return false;
+    var index: usize = blankCharacterLength(identifier, 0, true) orelse return false;
+    while (index < identifier.len) {
+        if (identifier[index] == '.') {
+            if (index + 1 == identifier.len) return false;
+            index += 1;
+            continue;
+        }
+        const length = blankCharacterLength(identifier, index, false) orelse return false;
+        index += length;
+    }
+    return true;
 }
 
-fn isBlankRest(byte: u8) bool {
-    return isBlankFirst(byte) or byte == '-' or byte == '.';
+fn blankCharacterLength(input: []const u8, index: usize, first: bool) ?usize {
+    if (index >= input.len) return null;
+    const length: usize = std.unicode.utf8ByteSequenceLength(input[index]) catch return null;
+    if (input.len - index < length) return null;
+    const codepoint = std.unicode.utf8Decode(input[index .. index + length]) catch return null;
+
+    if (isPnCharsBase(codepoint) or codepoint == '_') return length;
+    if (codepoint >= '0' and codepoint <= '9') return length;
+    if (!first and (codepoint == '-' or codepoint == 0x00b7 or
+        (codepoint >= 0x0300 and codepoint <= 0x036f) or
+        (codepoint >= 0x203f and codepoint <= 0x2040))) return length;
+    return null;
+}
+
+fn isPnCharsBase(codepoint: u21) bool {
+    return (codepoint >= 'A' and codepoint <= 'Z') or
+        (codepoint >= 'a' and codepoint <= 'z') or
+        (codepoint >= 0x00c0 and codepoint <= 0x00d6) or
+        (codepoint >= 0x00d8 and codepoint <= 0x00f6) or
+        (codepoint >= 0x00f8 and codepoint <= 0x02ff) or
+        (codepoint >= 0x0370 and codepoint <= 0x037d) or
+        (codepoint >= 0x037f and codepoint <= 0x1fff) or
+        (codepoint >= 0x200c and codepoint <= 0x200d) or
+        (codepoint >= 0x2070 and codepoint <= 0x218f) or
+        (codepoint >= 0x2c00 and codepoint <= 0x2fef) or
+        (codepoint >= 0x3001 and codepoint <= 0xd7ff) or
+        (codepoint >= 0xf900 and codepoint <= 0xfdcf) or
+        (codepoint >= 0xfdf0 and codepoint <= 0xfffd) or
+        (codepoint >= 0x10000 and codepoint <= 0xeffff);
 }
 
 fn mapTermError(err: rdf.Error) Error {
@@ -315,6 +428,74 @@ test "N-Triples graph retains set semantics" {
     try std.testing.expectEqual(@as(usize, 1), graph.len());
 }
 
+test "N-Triples enforces Unicode blank-node label boundaries" {
+    var graph = try parseNTriples(
+        std.testing.allocator,
+        "_:é·clair <https://example.com/p> _:nodé .\n",
+    );
+    defer graph.deinit();
+    try std.testing.expectEqual(@as(usize, 1), graph.len());
+
+    const invalid = [_][]const u8{
+        "_:-bad <https://example.com/p> \"o\" .\n",
+        "_:a <https://example.com/p> _:trailing..\n",
+        "_:a <https://example.com/p> _:\u{200e}bad .\n",
+    };
+    for (invalid) |input| {
+        try std.testing.expectError(error.InvalidSyntax, parseNTriples(std.testing.allocator, input));
+    }
+}
+
+test "N-Triples serializer emits canonical syntax" {
+    var graph = rdf.Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    const subject = try graph.terms.internBlankNode("subject.1");
+    const predicate = try graph.terms.internNamedNode("https://example.com/name");
+    const language_literal = try graph.terms.internLanguageLiteral("Bună\n\"ziua\"\\", "RO");
+    const typed_literal = try graph.terms.internTypedLiteral("42", rdf.xsd_namespace ++ "integer");
+    _ = try graph.add(.{ .subject = subject, .predicate = predicate, .object = language_literal });
+    _ = try graph.add(.{ .subject = subject, .predicate = predicate, .object = typed_literal });
+
+    const output = try serializeNTriplesAlloc(std.testing.allocator, &graph);
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        "_:subject.1 <https://example.com/name> \"Bună\\n\\\"ziua\\\"\\\\\"@ro .\n" ++
+            "_:subject.1 <https://example.com/name> \"42\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
+        output,
+    );
+}
+
+test "N-Triples parse and serialize round trip is stable" {
+    const input =
+        "<https://example.com/s> <https://example.com/p> \"line\\nvalue\" .\n" ++
+        "_:node <https://example.com/p> <https://example.com/o> .\n";
+    var first = try parseNTriples(std.testing.allocator, input);
+    defer first.deinit();
+    const serialized = try serializeNTriplesAlloc(std.testing.allocator, &first);
+    defer std.testing.allocator.free(serialized);
+
+    var second = try parseNTriples(std.testing.allocator, serialized);
+    defer second.deinit();
+    const serialized_again = try serializeNTriplesAlloc(std.testing.allocator, &second);
+    defer std.testing.allocator.free(serialized_again);
+    try std.testing.expectEqualStrings(serialized, serialized_again);
+}
+
+test "N-Triples serializer rejects unrepresentable blank-node identifiers" {
+    var graph = rdf.Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    const subject = try graph.terms.internBlankNode("not?an-ntriples-label");
+    const predicate = try graph.terms.internNamedNode("https://example.com/p");
+    const object = try graph.terms.internSimpleLiteral("object");
+    _ = try graph.add(.{ .subject = subject, .predicate = predicate, .object = object });
+    try std.testing.expectError(
+        error.InvalidNTriplesTerm,
+        serializeNTriplesAlloc(std.testing.allocator, &graph),
+    );
+}
+
 test "N-Triples rejects malformed documents" {
     const invalid = [_][]const u8{
         "<relative> <https://example.com/p> <https://example.com/o> .\n",
@@ -341,9 +522,12 @@ fn exerciseNTriplesAllocations(allocator: std.mem.Allocator) !void {
         "<https://example.com/s> <https://example.com/p> \"Bun\\u0103\"@ro .\n",
     );
     defer graph.deinit();
+
+    const serialized = try serializeNTriplesAlloc(allocator, &graph);
+    defer allocator.free(serialized);
 }
 
-test "N-Triples parser handles every allocation failure without leaks" {
+test "N-Triples I/O handles every allocation failure without leaks" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         exerciseNTriplesAllocations,

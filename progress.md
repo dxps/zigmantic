@@ -88,6 +88,9 @@ separate packages only after their APIs and release cycles become independently 
 - Five N-Triples parser tests pass; the complete suite currently has 16 passing tests.
 - All 70 W3C positive and negative N-Triples syntax cases pass through the manifest-driven
   conformance runner.
+- Canonical N-Triples serialization, exact Unicode blank-node label validation, and
+  stable parse/serialize/parse round trips are implemented.
+- The local suite has 20 tests; all 70 official syntax cases continue to pass.
 
 ## Milestone status
 
@@ -98,9 +101,9 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Add N-Triples serialization and canonical escaping.
-2. Add parse/serialize/parse round-trip tests and deterministic output tests.
-3. Audit Unicode blank-node grammar beyond the cases covered by the official manifest.
+1. Review and freeze the N-Triples public API and error surface.
+2. Implement N-Quads parsing and serialization by sharing the N-Triples term grammar.
+3. Pin and run the official RDF 1.1 N-Quads syntax suite.
 
 ## Session log
 
@@ -155,3 +158,12 @@ separate packages only after their APIs and release cycles become independently 
 - Corrected term-separation handling: whitespace is optional where adjacent terminals
   are unambiguous.
 - Passed all 70 official syntax cases and all 16 local unit tests.
+
+### 2026-10-23 — N-Triples serialization
+
+- Added canonical-layout N-Triples serialization with deterministic graph-order output.
+- Added required literal escaping and compact language/datatype suffixes.
+- Implemented the complete Unicode range checks for N-Triples blank-node labels.
+- Rejected programmatic blank-node identifiers that cannot be represented in N-Triples.
+- Added byte-exact output, stable round-trip, Unicode boundary, and allocation-failure
+  coverage while retaining a full pass of the official syntax manifest.
