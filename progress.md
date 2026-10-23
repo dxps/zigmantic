@@ -103,7 +103,10 @@ separate packages only after their APIs and release cycles become independently 
 - The first Turtle parser slice supports both Turtle and SPARQL-style base/prefix
   directives, relative IRI references, prefixed names, `a`, comments, and simple
   resource-only triples.
-- The local suite has 32 tests; all 157 official N-Triples and N-Quads syntax cases
+- Turtle now supports labeled blank nodes; short and long single- or double-quoted
+  strings; language and explicit datatype suffixes; and native integer, decimal,
+  double, and boolean literals.
+- The local suite has 35 tests; all 157 official N-Triples and N-Quads syntax cases
   continue to pass. Turtle conformance is not yet claimed.
 
 ## Milestone status
@@ -117,8 +120,9 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Add Turtle literals, blank nodes, and complete prefixed-name grammar coverage.
-2. Add predicate/object lists, blank-node property lists, and RDF collections.
+1. Add predicate/object lists and anonymous blank nodes.
+2. Add blank-node property lists, RDF collections, and complete prefixed-name grammar
+   coverage.
 3. Pin the official Turtle suite and drive the parser to full syntax/evaluation
    conformance before adding serialization and TriG graph syntax.
 
@@ -240,3 +244,16 @@ separate packages only after their APIs and release cycles become independently 
 - Passed all 32 local tests and retained all 157 official N-Triples/N-Quads cases.
 - Kept the API and documentation explicit that this is an incremental subset, not a
   Turtle conformance claim.
+
+### 2026-10-24 — Turtle literals and labeled blank nodes
+
+- Added labeled blank nodes in subject and object positions with stable identity.
+- Added short and long single- and double-quoted strings with Turtle escape decoding.
+- Added language-tagged and explicitly typed literals, including prefixed datatypes.
+- Assigned the required XSD datatypes to integer, decimal, double, and boolean tokens
+  while preserving their lexical forms.
+- Handled the contextual ambiguity between directive tokens and the valid `@base` and
+  `@prefix` language tags.
+- Added semantic term-value checks, malformed-input cases, and allocation-failure
+  coverage for the new forms.
+- Passed all 35 local tests and retained all 157 official N-Triples/N-Quads cases.

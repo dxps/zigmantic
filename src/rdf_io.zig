@@ -19,8 +19,8 @@ pub const TurtleOptions = struct {
 };
 
 /// Parses the currently implemented RDF 1.1 Turtle subset into an owned graph.
-/// Directives, IRI references, prefixed names, `a`, and simple resource triples
-/// are supported. Other Turtle productions are added incrementally.
+/// Directives, resources, labeled blank nodes, and RDF literal forms are supported.
+/// Predicate/object lists and structural blank-node forms are added incrementally.
 pub fn parseTurtle(
     allocator: std.mem.Allocator,
     input: []const u8,
@@ -165,6 +165,14 @@ const TurtleToken = struct {
         prefix,
         iri_ref,
         prefixed_name,
+        blank_node_label,
+        string_literal,
+        language_tag,
+        datatype_marker,
+        integer,
+        decimal,
+        double,
+        boolean,
         keyword_a,
         dot,
         eof,
@@ -182,8 +190,21 @@ const TurtleLexer = struct {
         const start = self.index;
         switch (self.input[self.index]) {
             '.' => {
+                if (self.index + 1 < self.input.len and
+                    std.ascii.isDigit(self.input[self.index + 1]))
+                {
+                    return self.scanWord(start);
+                }
                 self.index += 1;
                 return .{ .tag = .dot, .lexeme = self.input[start..self.index] };
+            },
+            '"', '\'' => return self.scanString(),
+            '^' => {
+                if (self.index + 1 >= self.input.len or self.input[self.index + 1] != '^') {
+                    return error.InvalidSyntax;
+                }
+                self.index += 2;
+                return .{ .tag = .datatype_marker, .lexeme = self.input[start..self.index] };
             },
             '<' => {
                 self.index += 1;
@@ -208,11 +229,20 @@ const TurtleLexer = struct {
                 const directive = self.input[start..self.index];
                 if (std.mem.eql(u8, directive, "@base")) return .{ .tag = .at_base, .lexeme = directive };
                 if (std.mem.eql(u8, directive, "@prefix")) return .{ .tag = .at_prefix, .lexeme = directive };
-                return error.InvalidSyntax;
+                while (self.index < self.input.len and
+                    (std.ascii.isAlphanumeric(self.input[self.index]) or self.input[self.index] == '-'))
+                {
+                    self.index += 1;
+                }
+                return .{ .tag = .language_tag, .lexeme = self.input[start + 1 .. self.index] };
             },
             else => {},
         }
 
+        return self.scanWord(start);
+    }
+
+    fn scanWord(self: *TurtleLexer, start: usize) ParseError!TurtleToken {
         while (self.index < self.input.len and !isTurtleDelimiter(self.input[self.index])) {
             self.index += 1;
         }
@@ -223,8 +253,52 @@ const TurtleLexer = struct {
         if (std.ascii.eqlIgnoreCase(word, "BASE")) return .{ .tag = .base, .lexeme = word };
         if (std.ascii.eqlIgnoreCase(word, "PREFIX")) return .{ .tag = .prefix, .lexeme = word };
         if (std.mem.eql(u8, word, "a")) return .{ .tag = .keyword_a, .lexeme = word };
+        if (std.mem.eql(u8, word, "true") or std.mem.eql(u8, word, "false")) {
+            return .{ .tag = .boolean, .lexeme = word };
+        }
+        if (classifyTurtleNumeric(word)) |tag| return .{ .tag = tag, .lexeme = word };
+        if (std.mem.startsWith(u8, word, "_:")) {
+            return .{ .tag = .blank_node_label, .lexeme = word[2..] };
+        }
         if (std.mem.indexOfScalar(u8, word, ':') != null) {
             return .{ .tag = .prefixed_name, .lexeme = word };
+        }
+        return error.InvalidSyntax;
+    }
+
+    fn scanString(self: *TurtleLexer) ParseError!TurtleToken {
+        const quote = self.input[self.index];
+        const long = self.index + 2 < self.input.len and
+            self.input[self.index + 1] == quote and self.input[self.index + 2] == quote;
+        const delimiter_len: usize = if (long) 3 else 1;
+        self.index += delimiter_len;
+        const value_start = self.index;
+
+        while (self.index < self.input.len) {
+            if (self.input[self.index] == '\\') {
+                self.index += 1;
+                if (self.index >= self.input.len) return error.InvalidSyntax;
+                self.index += 1;
+                continue;
+            }
+            if (!long and (self.input[self.index] == '\n' or self.input[self.index] == '\r')) {
+                return error.InvalidSyntax;
+            }
+            if (self.input[self.index] == quote) {
+                if (!long) {
+                    const value = self.input[value_start..self.index];
+                    self.index += 1;
+                    return .{ .tag = .string_literal, .lexeme = value };
+                }
+                if (self.index + 2 < self.input.len and
+                    self.input[self.index + 1] == quote and self.input[self.index + 2] == quote)
+                {
+                    const value = self.input[value_start..self.index];
+                    self.index += 3;
+                    return .{ .tag = .string_literal, .lexeme = value };
+                }
+            }
+            self.index += 1;
         }
         return error.InvalidSyntax;
     }
@@ -248,7 +322,7 @@ const TurtleLexer = struct {
 
 fn isTurtleDelimiter(byte: u8) bool {
     return std.ascii.isWhitespace(byte) or switch (byte) {
-        '<', '>', '#', ';', ',', '[', ']', '(', ')', '"', '\'' => true,
+        '<', '>', '#', ';', ',', '[', ']', '(', ')', '"', '\'', '@', '^' => true,
         else => false,
     };
 }
@@ -259,6 +333,7 @@ const TurtleParser = struct {
     arena: std.heap.ArenaAllocator,
     prefixes: std.StringHashMapUnmanaged([]const u8) = .empty,
     base_iri: ?[]const u8 = null,
+    lookahead: ?TurtleToken = null,
 
     fn init(
         allocator: std.mem.Allocator,
@@ -286,21 +361,21 @@ const TurtleParser = struct {
 
     fn parseInto(self: *TurtleParser, graph: *rdf.Graph) ParseError!void {
         while (true) {
-            const first = try self.lexer.next();
+            const first = try self.nextToken();
             switch (first.tag) {
                 .eof => return,
                 .at_base => try self.parseBaseDirective(true),
                 .base => try self.parseBaseDirective(false),
                 .at_prefix => try self.parsePrefixDirective(true),
                 .prefix => try self.parsePrefixDirective(false),
-                .iri_ref, .prefixed_name => try self.parseTriple(graph, first),
+                .iri_ref, .prefixed_name, .blank_node_label => try self.parseTriple(graph, first),
                 else => return error.InvalidSyntax,
             }
         }
     }
 
     fn parseBaseDirective(self: *TurtleParser, requires_dot: bool) ParseError!void {
-        const value = try self.lexer.next();
+        const value = try self.nextToken();
         if (value.tag != .iri_ref) return error.InvalidSyntax;
         const decoded = try self.decodeIriRef(value.lexeme);
         defer self.allocator.free(decoded);
@@ -311,13 +386,13 @@ const TurtleParser = struct {
     }
 
     fn parsePrefixDirective(self: *TurtleParser, requires_dot: bool) ParseError!void {
-        const name = try self.lexer.next();
+        const name = try self.nextToken();
         if (name.tag != .prefixed_name) return error.InvalidSyntax;
         const colon = std.mem.indexOfScalar(u8, name.lexeme, ':') orelse return error.InvalidSyntax;
         if (colon + 1 != name.lexeme.len or !isPrefixLabel(name.lexeme[0..colon])) {
             return error.InvalidSyntax;
         }
-        const value = try self.lexer.next();
+        const value = try self.nextToken();
         if (value.tag != .iri_ref) return error.InvalidSyntax;
         const decoded = try self.decodeIriRef(value.lexeme);
         defer self.allocator.free(decoded);
@@ -335,19 +410,92 @@ const TurtleParser = struct {
         graph: *rdf.Graph,
         subject_token: TurtleToken,
     ) ParseError!void {
-        const subject = try self.parseResource(&graph.terms, subject_token);
-        const predicate_token = try self.lexer.next();
+        const subject = try self.parseSubject(&graph.terms, subject_token);
+        const predicate_token = try self.nextToken();
         const predicate = if (predicate_token.tag == .keyword_a)
             graph.terms.internNamedNode(rdf.rdf_namespace ++ "type") catch |err| return mapTermError(err)
         else
             try self.parseResource(&graph.terms, predicate_token);
-        const object = try self.parseResource(&graph.terms, try self.lexer.next());
+        const object = try self.parseObject(&graph.terms, try self.nextToken());
         try self.expect(.dot);
         _ = graph.add(.{
             .subject = subject,
             .predicate = predicate,
             .object = object,
         }) catch |err| return mapTermError(err);
+    }
+
+    fn parseSubject(
+        self: *TurtleParser,
+        pool: *rdf.TermPool,
+        token: TurtleToken,
+    ) ParseError!rdf.TermId {
+        if (token.tag == .blank_node_label) return self.parseBlankNode(pool, token.lexeme);
+        return self.parseResource(pool, token);
+    }
+
+    fn parseObject(
+        self: *TurtleParser,
+        pool: *rdf.TermPool,
+        token: TurtleToken,
+    ) ParseError!rdf.TermId {
+        return switch (token.tag) {
+            .blank_node_label => self.parseBlankNode(pool, token.lexeme),
+            .string_literal => self.parseStringLiteral(pool, token.lexeme),
+            .integer => self.parseTypedLiteral(pool, token.lexeme, rdf.xsd_namespace ++ "integer"),
+            .decimal => self.parseTypedLiteral(pool, token.lexeme, rdf.xsd_namespace ++ "decimal"),
+            .double => self.parseTypedLiteral(pool, token.lexeme, rdf.xsd_namespace ++ "double"),
+            .boolean => self.parseTypedLiteral(pool, token.lexeme, rdf.xsd_namespace ++ "boolean"),
+            else => self.parseResource(pool, token),
+        };
+    }
+
+    fn parseBlankNode(
+        self: *TurtleParser,
+        pool: *rdf.TermPool,
+        label: []const u8,
+    ) ParseError!rdf.TermId {
+        _ = self;
+        if (!isNTriplesBlankLabel(label)) return error.InvalidSyntax;
+        return pool.internBlankNode(label) catch |err| return mapTermError(err);
+    }
+
+    fn parseStringLiteral(
+        self: *TurtleParser,
+        pool: *rdf.TermPool,
+        raw: []const u8,
+    ) ParseError!rdf.TermId {
+        const lexical_form = try self.decodeString(raw);
+        defer self.allocator.free(lexical_form);
+
+        const suffix = try self.nextToken();
+        switch (suffix.tag) {
+            .language_tag => return pool.internLanguageLiteral(lexical_form, suffix.lexeme) catch |err|
+                return mapTermError(err),
+            .at_base, .at_prefix => return pool.internLanguageLiteral(lexical_form, suffix.lexeme[1..]) catch |err|
+                return mapTermError(err),
+            .datatype_marker => {
+                const datatype_token = try self.nextToken();
+                const datatype = try self.resolveResource(datatype_token);
+                defer self.allocator.free(datatype);
+                return pool.internTypedLiteral(lexical_form, datatype) catch |err|
+                    return mapTermError(err);
+            },
+            else => {
+                self.lookahead = suffix;
+                return pool.internSimpleLiteral(lexical_form) catch |err| return mapTermError(err);
+            },
+        }
+    }
+
+    fn parseTypedLiteral(
+        self: *TurtleParser,
+        pool: *rdf.TermPool,
+        lexical_form: []const u8,
+        datatype: []const u8,
+    ) ParseError!rdf.TermId {
+        _ = self;
+        return pool.internTypedLiteral(lexical_form, datatype) catch |err| return mapTermError(err);
     }
 
     fn parseResource(
@@ -357,19 +505,62 @@ const TurtleParser = struct {
     ) ParseError!rdf.TermId {
         switch (token.tag) {
             .iri_ref => {
-                const decoded = try self.decodeIriRef(token.lexeme);
-                defer self.allocator.free(decoded);
-                const resolved = try self.resolveIri(decoded);
+                const resolved = try self.resolveResource(token);
                 defer self.allocator.free(resolved);
                 return pool.internNamedNode(resolved) catch |err| return mapTermError(err);
             },
             .prefixed_name => {
-                const expanded = try self.expandPrefixedName(token.lexeme);
-                defer self.allocator.free(expanded);
-                return pool.internNamedNode(expanded) catch |err| return mapTermError(err);
+                const resolved = try self.resolveResource(token);
+                defer self.allocator.free(resolved);
+                return pool.internNamedNode(resolved) catch |err| return mapTermError(err);
             },
             else => return error.InvalidSyntax,
         }
+    }
+
+    fn resolveResource(self: *TurtleParser, token: TurtleToken) ParseError![]u8 {
+        return switch (token.tag) {
+            .iri_ref => blk: {
+                const decoded = try self.decodeIriRef(token.lexeme);
+                defer self.allocator.free(decoded);
+                break :blk try self.resolveIri(decoded);
+            },
+            .prefixed_name => self.expandPrefixedName(token.lexeme),
+            else => error.InvalidSyntax,
+        };
+    }
+
+    fn decodeString(self: *TurtleParser, raw: []const u8) ParseError![]u8 {
+        var decoded: std.ArrayList(u8) = .empty;
+        errdefer decoded.deinit(self.allocator);
+        var index: usize = 0;
+        while (index < raw.len) {
+            if (raw[index] != '\\') {
+                try decoded.append(self.allocator, raw[index]);
+                index += 1;
+                continue;
+            }
+            index += 1;
+            if (index >= raw.len) return error.InvalidSyntax;
+            const escaped = raw[index];
+            switch (escaped) {
+                't' => try decoded.append(self.allocator, '\t'),
+                'b' => try decoded.append(self.allocator, 0x08),
+                'n' => try decoded.append(self.allocator, '\n'),
+                'r' => try decoded.append(self.allocator, '\r'),
+                'f' => try decoded.append(self.allocator, 0x0c),
+                '"' => try decoded.append(self.allocator, '"'),
+                '\'' => try decoded.append(self.allocator, '\''),
+                '\\' => try decoded.append(self.allocator, '\\'),
+                'u', 'U' => {
+                    try decodeUnicodeEscape(self.allocator, &decoded, raw, &index);
+                    continue;
+                },
+                else => return error.InvalidSyntax,
+            }
+            index += 1;
+        }
+        return decoded.toOwnedSlice(self.allocator);
     }
 
     fn decodeIriRef(self: *TurtleParser, raw: []const u8) ParseError![]u8 {
@@ -424,9 +615,56 @@ const TurtleParser = struct {
     }
 
     fn expect(self: *TurtleParser, expected: TurtleToken.Tag) ParseError!void {
-        if ((try self.lexer.next()).tag != expected) return error.InvalidSyntax;
+        if ((try self.nextToken()).tag != expected) return error.InvalidSyntax;
+    }
+
+    fn nextToken(self: *TurtleParser) ParseError!TurtleToken {
+        if (self.lookahead) |token| {
+            self.lookahead = null;
+            return token;
+        }
+        return self.lexer.next();
     }
 };
+
+fn classifyTurtleNumeric(value: []const u8) ?TurtleToken.Tag {
+    if (value.len == 0) return null;
+    var index: usize = 0;
+    if (value[index] == '+' or value[index] == '-') {
+        index += 1;
+        if (index == value.len) return null;
+    }
+
+    const integer_start = index;
+    while (index < value.len and std.ascii.isDigit(value[index])) index += 1;
+    const integer_digits = index - integer_start;
+
+    var has_dot = false;
+    var fraction_digits: usize = 0;
+    if (index < value.len and value[index] == '.') {
+        has_dot = true;
+        index += 1;
+        const fraction_start = index;
+        while (index < value.len and std.ascii.isDigit(value[index])) index += 1;
+        fraction_digits = index - fraction_start;
+    }
+
+    var has_exponent = false;
+    if (index < value.len and (value[index] == 'e' or value[index] == 'E')) {
+        has_exponent = true;
+        index += 1;
+        if (index < value.len and (value[index] == '+' or value[index] == '-')) index += 1;
+        const exponent_start = index;
+        while (index < value.len and std.ascii.isDigit(value[index])) index += 1;
+        if (index == exponent_start) return null;
+    }
+    if (index != value.len) return null;
+
+    if (has_exponent and (integer_digits > 0 or fraction_digits > 0)) return .double;
+    if (has_dot and fraction_digits > 0) return .decimal;
+    if (!has_dot and integer_digits > 0) return .integer;
+    return null;
+}
 
 fn isPrefixLabel(value: []const u8) bool {
     if (value.len == 0) return true;
@@ -1082,6 +1320,93 @@ test "Turtle supports SPARQL directives and an external base IRI" {
     );
 }
 
+test "Turtle parses string forms, language tags, and explicit datatypes" {
+    const input =
+        "@prefix ex: <https://example.com/> .\n" ++
+        "ex:s ex:short \"line\\nvalue\" .\n" ++
+        "ex:s ex:single 'single\\'quote' .\n" ++
+        "ex:s ex:long \"\"\"long\nvalue\"\"\" .\n" ++
+        "ex:s ex:longSingle '''long\nsingle''' .\n" ++
+        "ex:s ex:language \"Salut\"@RO-Latn .\n" ++
+        "ex:s ex:keywordLanguage \"value\"@prefix .\n" ++
+        "ex:s ex:typed \"answer\"^^ex:custom .\n";
+    var graph = try parseTurtle(std.testing.allocator, input, .{});
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 7), graph.len());
+    const expected_lexical_forms = [_][]const u8{
+        "line\nvalue",
+        "single'quote",
+        "long\nvalue",
+        "long\nsingle",
+        "Salut",
+        "value",
+        "answer",
+    };
+    for (graph.items(), expected_lexical_forms) |triple, expected| {
+        try std.testing.expectEqualStrings(
+            expected,
+            graph.terms.view(triple.object).?.literal.lexical_form,
+        );
+    }
+
+    const language = graph.terms.view(graph.items()[4].object).?.literal;
+    try std.testing.expectEqualStrings("ro-latn", language.language.?);
+    try std.testing.expectEqualStrings(rdf.rdf_lang_string, language.datatype);
+
+    const keyword_language = graph.terms.view(graph.items()[5].object).?.literal;
+    try std.testing.expectEqualStrings("prefix", keyword_language.language.?);
+
+    const typed = graph.terms.view(graph.items()[6].object).?.literal;
+    try std.testing.expectEqualStrings("https://example.com/custom", typed.datatype);
+    try std.testing.expect(typed.language == null);
+}
+
+test "Turtle assigns native literal datatypes" {
+    const input =
+        "@prefix ex: <https://example.com/> .\n" ++
+        "ex:s ex:integer +42 .\n" ++
+        "ex:s ex:decimal .5 .\n" ++
+        "ex:s ex:double 6.02e23 .\n" ++
+        "ex:s ex:boolean false .\n";
+    var graph = try parseTurtle(std.testing.allocator, input, .{});
+    defer graph.deinit();
+
+    const expected = [_]struct { lexical: []const u8, datatype: []const u8 }{
+        .{ .lexical = "+42", .datatype = rdf.xsd_namespace ++ "integer" },
+        .{ .lexical = ".5", .datatype = rdf.xsd_namespace ++ "decimal" },
+        .{ .lexical = "6.02e23", .datatype = rdf.xsd_namespace ++ "double" },
+        .{ .lexical = "false", .datatype = rdf.xsd_namespace ++ "boolean" },
+    };
+    for (graph.items(), expected) |triple, value| {
+        const literal = graph.terms.view(triple.object).?.literal;
+        try std.testing.expectEqualStrings(value.lexical, literal.lexical_form);
+        try std.testing.expectEqualStrings(value.datatype, literal.datatype);
+    }
+}
+
+test "Turtle parses labeled blank-node subjects and objects" {
+    const input =
+        "@prefix ex: <https://example.com/> .\n" ++
+        "_:subject ex:knows _:object .\n" ++
+        "_:object ex:name \"Object\" .\n";
+    var graph = try parseTurtle(std.testing.allocator, input, .{});
+    defer graph.deinit();
+
+    try std.testing.expectEqualStrings(
+        "subject",
+        graph.terms.view(graph.items()[0].subject).?.blank_node,
+    );
+    try std.testing.expectEqualStrings(
+        "object",
+        graph.terms.view(graph.items()[0].object).?.blank_node,
+    );
+    try std.testing.expectEqual(
+        graph.items()[0].object,
+        graph.items()[1].subject,
+    );
+}
+
 test "Turtle rejects invalid directives and unresolved names" {
     const invalid = [_][]const u8{
         "<relative> <https://example.com/p> <https://example.com/o> .",
@@ -1089,6 +1414,12 @@ test "Turtle rejects invalid directives and unresolved names" {
         "@prefix bad <https://example.com/> .",
         "@BASE <https://example.com/> .",
         "@base <https://example.com/>",
+        "@prefix ex: <https://example.com/> . ex:s ex:p \"unterminated .",
+        "@prefix ex: <https://example.com/> . ex:s ex:p \"bad\\q\" .",
+        "@prefix ex: <https://example.com/> . ex:s ex:p \"value\"@ .",
+        "@prefix ex: <https://example.com/> . ex:s ex:p \"value\"^^_:datatype .",
+        "@prefix ex: <https://example.com/> . ex:s ex:p _:bad/label .",
+        "@prefix ex: <https://example.com/> . \"literal\" ex:p ex:o .",
     };
     for (invalid) |input| {
         try std.testing.expectError(
@@ -1101,7 +1432,8 @@ test "Turtle rejects invalid directives and unresolved names" {
 fn exerciseTurtleAllocations(allocator: std.mem.Allocator) !void {
     var graph = try parseTurtle(
         allocator,
-        "@base <https://example.com/> . @prefix ex: <vocab/> . ex:s a ex:Thing .",
+        "@base <https://example.com/> . @prefix ex: <vocab/> . " ++
+            "_:s ex:name \"Bună\\nziua\"@ro .",
         .{},
     );
     defer graph.deinit();

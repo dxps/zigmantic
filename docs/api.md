@@ -38,12 +38,13 @@ not change the ownership or output guarantees of these whole-document functions.
 Turtle parser slice. `TurtleOptions.base_iri` supplies the optional retrieval or
 containing-document base. The parser supports `@base`, `@prefix`, `BASE`, and `PREFIX`
 directives; relative IRI references; default and named prefixed names; `a`; comments;
-and simple resource-only triples.
+labeled blank nodes; all four quoted-string forms; language and datatype suffixes; and
+integer, decimal, double, and boolean literals.
 
 The returned graph owns all parsed terms and follows the same lifetime and error rules
-as `parseNTriples`. The current API is deliberately marked as a subset: literals, blank
-nodes, predicate/object lists, collections, and the official Turtle conformance suite
-remain before Turtle conformance can be claimed.
+as `parseNTriples`. The current API is deliberately marked as a subset: anonymous blank
+nodes, blank-node property lists, predicate/object lists, collections, and the official
+Turtle conformance suite remain before Turtle conformance can be claimed.
 
 ## IRI references
 
