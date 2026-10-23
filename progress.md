@@ -77,7 +77,11 @@ separate packages only after their APIs and release cycles become independently 
 - 2026-10-23: Ownership and validation boundaries documented in `docs/architecture.md`.
 - RDF term equality and deterministic hashing now work across independent term pools.
 - Graph and dataset pattern iterators provide allocation-free statement filtering.
-- Nine RDF core tests pass under `zig build test`.
+- Constructor edge cases cover Unicode, empty lexical forms, datatype distinctions,
+  malformed UTF-8, and structurally invalid identifiers.
+- Exhaustive allocation-failure injection covers graph and dataset construction without
+  leaks or swallowed out-of-memory errors.
+- Eleven RDF core tests pass under `zig build test`.
 
 ## Milestone status
 
@@ -87,10 +91,9 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Expand constructor edge-case and allocation-failure tests.
-2. Add the official RDF test manifests to the conformance harness without yet vendoring
+1. Add the official RDF test manifests to the conformance harness without yet vendoring
    generated artifacts.
-3. Begin the N-Triples tokenizer only after the RDF data-model API is stable.
+2. Begin the N-Triples tokenizer after the RDF data-model API review.
 
 ## Session log
 
@@ -121,3 +124,9 @@ separate packages only after their APIs and release cycles become independently 
 - Added allocation-free triple and quad pattern iterators.
 - Documented identifier and pattern-matching semantics.
 - Added three focused unit tests.
+
+### 2026-10-23 — RDF robustness
+
+- Added constructor edge-case coverage for RDF term distinctions and invalid input.
+- Added exhaustive allocation-failure tests for graph and dataset ownership paths.
+- Verified that allocation failures propagate and all partially built state is reclaimed.

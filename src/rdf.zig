@@ -575,6 +575,33 @@ test "term constructors reject structurally invalid values" {
     try std.testing.expectError(error.InvalidLanguageTag, pool.internLanguageLiteral("hello", "en--GB"));
 }
 
+test "term constructors preserve RDF term distinctions at edge cases" {
+    var pool = TermPool.init(std.testing.allocator);
+    defer pool.deinit();
+
+    const empty = try pool.internSimpleLiteral("");
+    const unicode = try pool.internLanguageLiteral("Bună ziua 👋", "RO-latn");
+    const integer_one = try pool.internTypedLiteral("1", xsd_namespace ++ "integer");
+    const decimal_one = try pool.internTypedLiteral("1", xsd_namespace ++ "decimal");
+
+    try std.testing.expect(!try pool.eqlTerm(empty, &pool, unicode));
+    try std.testing.expect(!try pool.eqlTerm(integer_one, &pool, decimal_one));
+    try std.testing.expectEqualStrings(
+        "ro-latn",
+        pool.view(unicode).?.literal.language.?,
+    );
+
+    try std.testing.expectError(error.InvalidIri, pool.internNamedNode("1invalid:scheme"));
+    try std.testing.expectError(error.InvalidIri, pool.internNamedNode("https://example.com/<bad>"));
+    try std.testing.expectError(error.InvalidBlankNodeIdentifier, pool.internBlankNode("two words"));
+    try std.testing.expectError(error.InvalidLanguageTag, pool.internLanguageLiteral("hello", "-en"));
+    try std.testing.expectError(error.InvalidLanguageTag, pool.internLanguageLiteral("hello", "en-"));
+
+    const invalid_utf8 = [_]u8{0xff};
+    try std.testing.expectError(error.InvalidUtf8, pool.internSimpleLiteral(&invalid_utf8));
+    try std.testing.expectError(error.InvalidIri, pool.internNamedNode(&invalid_utf8));
+}
+
 test "graph has set semantics and validates triple positions" {
     var graph = Graph.init(std.testing.allocator);
     defer graph.deinit();
@@ -680,4 +707,43 @@ test "dataset iterator distinguishes default and named graphs" {
     var named_matches = dataset.iterator(.{ .graph_name = .{ .named = graph_name } });
     try std.testing.expectEqual(GraphName{ .named = graph_name }, named_matches.next().?.graph_name);
     try std.testing.expectEqual(@as(?Quad, null), named_matches.next());
+}
+
+fn exerciseGraphAllocations(allocator: std.mem.Allocator) !void {
+    var graph = Graph.init(allocator);
+    defer graph.deinit();
+
+    const subject = try graph.terms.internNamedNode("https://example.com/subject");
+    const predicate = try graph.terms.internNamedNode("https://example.com/predicate");
+    const object = try graph.terms.internLanguageLiteral("Bună", "RO");
+    _ = try graph.add(.{ .subject = subject, .predicate = predicate, .object = object });
+}
+
+fn exerciseDatasetAllocations(allocator: std.mem.Allocator) !void {
+    var dataset = Dataset.init(allocator);
+    defer dataset.deinit();
+
+    const subject = try dataset.terms.internBlankNode("subject");
+    const predicate = try dataset.terms.internNamedNode("https://example.com/predicate");
+    const object = try dataset.terms.internTypedLiteral("42", xsd_namespace ++ "integer");
+    const graph_name = try dataset.terms.internNamedNode("https://example.com/graph");
+    _ = try dataset.add(.{
+        .subject = subject,
+        .predicate = predicate,
+        .object = object,
+        .graph_name = .{ .named = graph_name },
+    });
+}
+
+test "RDF owners handle every allocation failure without leaks" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseGraphAllocations,
+        .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseDatasetAllocations,
+        .{},
+    );
 }
