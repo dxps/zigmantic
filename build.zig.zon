@@ -10,6 +10,7 @@
         "docs",
         "readme.md",
         "src",
+        "tests",
         "progress.md",
     },
 }

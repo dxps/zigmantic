@@ -82,18 +82,23 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers graph and dataset construction without
   leaks or swallowed out-of-memory errors.
 - Eleven RDF core tests pass under `zig build test`.
+- The `rdf_io` module now contains the first incremental RDF 1.1 N-Triples parser.
+- The official W3C RDF test repository and RDF 1.1 N-Triples manifest path are recorded
+  under `tests/conformance`; upstream data is not yet vendored or pinned.
+- Five N-Triples parser tests pass; the complete suite currently has 16 passing tests.
 
 ## Milestone status
 
 - Milestone 1 — project skeleton and conventions: complete.
-- Milestone 2 — RDF 1.1 data model: in progress.
-- Milestones 3–14: not started.
+- Milestone 2 — RDF 1.1 data model: substantially complete; API review remains.
+- Milestone 3 — N-Triples and N-Quads: in progress.
+- Milestones 4–14: not started.
 
 ## Next actions
 
-1. Add the official RDF test manifests to the conformance harness without yet vendoring
-   generated artifacts.
-2. Begin the N-Triples tokenizer after the RDF data-model API review.
+1. Pin and import the official RDF 1.1 N-Triples test suite with its license.
+2. Run the positive and negative syntax manifests and close grammar gaps.
+3. Add N-Triples serialization and canonical escaping.
 
 ## Session log
 
@@ -130,3 +135,11 @@ separate packages only after their APIs and release cycles become independently 
 - Added constructor edge-case coverage for RDF term distinctions and invalid input.
 - Added exhaustive allocation-failure tests for graph and dataset ownership paths.
 - Verified that allocation failures propagate and all partially built state is reclaimed.
+
+### 2026-10-23 — N-Triples foundation
+
+- Added the public `rdf_io` module and an owned-graph N-Triples parsing API.
+- Implemented line grammar, comments, RDF term forms, language and datatype suffixes,
+  string escapes, Unicode escapes, UTF-8 checks, and duplicate elimination.
+- Added parser syntax, semantic, and exhaustive allocation-failure tests.
+- Recorded the official W3C RDF 1.1 N-Triples test manifest source.
