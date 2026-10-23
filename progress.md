@@ -83,9 +83,11 @@ separate packages only after their APIs and release cycles become independently 
   leaks or swallowed out-of-memory errors.
 - Eleven RDF core tests pass under `zig build test`.
 - The `rdf_io` module now contains the first incremental RDF 1.1 N-Triples parser.
-- The official W3C RDF test repository and RDF 1.1 N-Triples manifest path are recorded
-  under `tests/conformance`; upstream data is not yet vendored or pinned.
+- The official W3C RDF 1.1 N-Triples manifest and its 70 referenced inputs are vendored
+  at revision `bfefa770267ec0e5b6e45764bbca4ee43789ba72` with upstream provenance and license.
 - Five N-Triples parser tests pass; the complete suite currently has 16 passing tests.
+- All 70 W3C positive and negative N-Triples syntax cases pass through the manifest-driven
+  conformance runner.
 
 ## Milestone status
 
@@ -96,9 +98,9 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Pin and import the official RDF 1.1 N-Triples test suite with its license.
-2. Run the positive and negative syntax manifests and close grammar gaps.
-3. Add N-Triples serialization and canonical escaping.
+1. Add N-Triples serialization and canonical escaping.
+2. Add parse/serialize/parse round-trip tests and deterministic output tests.
+3. Audit Unicode blank-node grammar beyond the cases covered by the official manifest.
 
 ## Session log
 
@@ -143,3 +145,13 @@ separate packages only after their APIs and release cycles become independently 
   string escapes, Unicode escapes, UTF-8 checks, and duplicate elimination.
 - Added parser syntax, semantic, and exhaustive allocation-failure tests.
 - Recorded the official W3C RDF 1.1 N-Triples test manifest source.
+
+### 2026-10-23 — N-Triples conformance harness
+
+- Pinned the W3C RDF test repository to an immutable revision.
+- Vendored only the RDF 1.1 N-Triples manifest and its 70 referenced inputs, retaining
+  upstream provenance and licensing.
+- Added a manifest-driven Zig runner for all positive and negative syntax cases.
+- Corrected term-separation handling: whitespace is optional where adjacent terminals
+  are unambiguous.
+- Passed all 70 official syntax cases and all 16 local unit tests.

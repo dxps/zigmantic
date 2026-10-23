@@ -26,9 +26,9 @@ const NTriplesParser = struct {
         try self.skipEmptyLinesAndComments();
         while (!self.atEnd()) {
             const subject = try self.parseSubject(&graph.terms);
-            try self.requireHorizontalWhitespace();
+            self.skipHorizontalWhitespace();
             const predicate = try self.parseIri(&graph.terms);
-            try self.requireHorizontalWhitespace();
+            self.skipHorizontalWhitespace();
             const object = try self.parseObject(&graph.terms);
             self.skipHorizontalWhitespace();
             try self.expect('.');
@@ -228,12 +228,6 @@ const NTriplesParser = struct {
         }
     }
 
-    fn requireHorizontalWhitespace(self: *NTriplesParser) Error!void {
-        const start = self.index;
-        self.skipHorizontalWhitespace();
-        if (self.index == start) return error.InvalidSyntax;
-    }
-
     fn skipComment(self: *NTriplesParser) void {
         while (self.peek()) |byte| {
             if (byte == '\n' or byte == '\r') return;
@@ -324,7 +318,7 @@ test "N-Triples graph retains set semantics" {
 test "N-Triples rejects malformed documents" {
     const invalid = [_][]const u8{
         "<relative> <https://example.com/p> <https://example.com/o> .\n",
-        "<https://example.com/s><https://example.com/p> \"o\" .\n",
+        "<https://example.com/s> garbage <https://example.com/o> .\n",
         "<https://example.com/s> _:predicate \"o\" .\n",
         "<https://example.com/s> <https://example.com/p> 'o' .\n",
         "<https://example.com/s> <https://example.com/p> \"bad\\x\" .\n",
