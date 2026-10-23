@@ -96,6 +96,8 @@ separate packages only after their APIs and release cycles become independently 
 - The official W3C RDF 1.1 N-Quads manifest and its 87 referenced inputs are vendored
   at revision `bfefa770267ec0e5b6e45764bbca4ee43789ba72` with provenance and license.
 - All 157 official N-Triples and N-Quads positive and negative syntax cases pass.
+- The whole-document RDF line-syntax API now has documented ownership, ordering, and
+  error guarantees in `docs/api.md`.
 
 ## Milestone status
 
@@ -106,8 +108,8 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Review and freeze the RDF line-syntax public API and error surface.
-2. Design the shared lexer and IRI-resolution boundary for Turtle and TriG.
+1. Design the shared lexer and IRI-resolution boundary for Turtle and TriG.
+2. Implement RFC 3986/3987-compatible relative IRI resolution with focused tests.
 3. Begin the Turtle parser with directives, prefixed names, and base IRI resolution.
 
 ## Session log
@@ -192,3 +194,13 @@ separate packages only after their APIs and release cycles become independently 
 - Ensured each input buffer is released immediately after its case completes.
 - Passed all 87 N-Quads and all 70 N-Triples official syntax cases.
 - Marked the N-Triples and N-Quads milestone complete.
+
+### 2026-10-24 — RDF line-syntax API review
+
+- Documented ownership and ordering guarantees for parsing and serialization.
+- Replaced the broad parser error union with `ParseError`, limited to allocation,
+  malformed UTF-8, and invalid syntax failures.
+- Renamed the shared serializer failure to `InvalidBlankNodeLabel` so it accurately
+  describes both N-Triples and N-Quads behavior.
+- Kept whole-document APIs separate from future streaming APIs.
+- Retained all 24 local tests and all 157 official syntax cases.

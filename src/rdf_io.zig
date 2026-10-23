@@ -3,14 +3,17 @@
 const std = @import("std");
 const rdf = @import("rdf.zig");
 
-pub const Error = rdf.Error || error{InvalidSyntax};
+pub const ParseError = std.mem.Allocator.Error || error{
+    InvalidSyntax,
+    InvalidUtf8,
+};
 pub const SerializeError = std.mem.Allocator.Error || error{
-    InvalidNTriplesTerm,
+    InvalidBlankNodeLabel,
     UnknownTerm,
 };
 
 /// Parses one complete RDF 1.1 N-Triples document into an owned graph.
-pub fn parseNTriples(allocator: std.mem.Allocator, input: []const u8) Error!rdf.Graph {
+pub fn parseNTriples(allocator: std.mem.Allocator, input: []const u8) ParseError!rdf.Graph {
     if (!std.unicode.utf8ValidateSlice(input)) return error.InvalidUtf8;
 
     var graph = rdf.Graph.init(allocator);
@@ -22,7 +25,7 @@ pub fn parseNTriples(allocator: std.mem.Allocator, input: []const u8) Error!rdf.
 }
 
 /// Parses one complete RDF 1.1 N-Quads document into an owned dataset.
-pub fn parseNQuads(allocator: std.mem.Allocator, input: []const u8) Error!rdf.Dataset {
+pub fn parseNQuads(allocator: std.mem.Allocator, input: []const u8) ParseError!rdf.Dataset {
     if (!std.unicode.utf8ValidateSlice(input)) return error.InvalidUtf8;
 
     var dataset = rdf.Dataset.init(allocator);
@@ -91,7 +94,7 @@ fn appendTerm(
     switch (term) {
         .named_node => |iri| try appendIri(allocator, output, iri),
         .blank_node => |identifier| {
-            if (!isNTriplesBlankLabel(identifier)) return error.InvalidNTriplesTerm;
+            if (!isNTriplesBlankLabel(identifier)) return error.InvalidBlankNodeLabel;
             try output.appendSlice(allocator, "_:");
             try output.appendSlice(allocator, identifier);
         },
@@ -132,7 +135,7 @@ const LineParser = struct {
     input: []const u8,
     index: usize = 0,
 
-    fn parseNTriplesInto(self: *LineParser, graph: *rdf.Graph) Error!void {
+    fn parseNTriplesInto(self: *LineParser, graph: *rdf.Graph) ParseError!void {
         try self.skipEmptyLinesAndComments();
         while (!self.atEnd()) {
             const subject = try self.parseSubject(&graph.terms);
@@ -143,16 +146,16 @@ const LineParser = struct {
             self.skipHorizontalWhitespace();
             try self.finishStatement();
 
-            _ = try graph.add(.{
+            _ = graph.add(.{
                 .subject = subject,
                 .predicate = predicate,
                 .object = object,
-            });
+            }) catch |err| return mapTermError(err);
             try self.skipEmptyLinesAndComments();
         }
     }
 
-    fn parseNQuadsInto(self: *LineParser, dataset: *rdf.Dataset) Error!void {
+    fn parseNQuadsInto(self: *LineParser, dataset: *rdf.Dataset) ParseError!void {
         try self.skipEmptyLinesAndComments();
         while (!self.atEnd()) {
             const subject = try self.parseSubject(&dataset.terms);
@@ -169,24 +172,24 @@ const LineParser = struct {
             self.skipHorizontalWhitespace();
             try self.finishStatement();
 
-            _ = try dataset.add(.{
+            _ = dataset.add(.{
                 .subject = subject,
                 .predicate = predicate,
                 .object = object,
                 .graph_name = graph_name,
-            });
+            }) catch |err| return mapTermError(err);
             try self.skipEmptyLinesAndComments();
         }
     }
 
-    fn finishStatement(self: *LineParser) Error!void {
+    fn finishStatement(self: *LineParser) ParseError!void {
         try self.expect('.');
         self.skipHorizontalWhitespace();
         if (self.peek() == '#') self.skipComment();
         try self.consumeLineEndOrEof();
     }
 
-    fn parseSubject(self: *LineParser, pool: *rdf.TermPool) Error!rdf.TermId {
+    fn parseSubject(self: *LineParser, pool: *rdf.TermPool) ParseError!rdf.TermId {
         return switch (self.peek() orelse return error.InvalidSyntax) {
             '<' => self.parseIri(pool),
             '_' => self.parseBlankNode(pool),
@@ -194,7 +197,7 @@ const LineParser = struct {
         };
     }
 
-    fn parseObject(self: *LineParser, pool: *rdf.TermPool) Error!rdf.TermId {
+    fn parseObject(self: *LineParser, pool: *rdf.TermPool) ParseError!rdf.TermId {
         return switch (self.peek() orelse return error.InvalidSyntax) {
             '<' => self.parseIri(pool),
             '_' => self.parseBlankNode(pool),
@@ -203,14 +206,14 @@ const LineParser = struct {
         };
     }
 
-    fn parseIri(self: *LineParser, pool: *rdf.TermPool) Error!rdf.TermId {
+    fn parseIri(self: *LineParser, pool: *rdf.TermPool) ParseError!rdf.TermId {
         var value: std.ArrayList(u8) = .empty;
         defer value.deinit(self.allocator);
         try self.parseIriValue(&value);
         return pool.internNamedNode(value.items) catch |err| return mapTermError(err);
     }
 
-    fn parseIriValue(self: *LineParser, value: *std.ArrayList(u8)) Error!void {
+    fn parseIriValue(self: *LineParser, value: *std.ArrayList(u8)) ParseError!void {
         try self.expect('<');
         while (self.peek()) |byte| {
             switch (byte) {
@@ -232,7 +235,7 @@ const LineParser = struct {
         return error.InvalidSyntax;
     }
 
-    fn parseBlankNode(self: *LineParser, pool: *rdf.TermPool) Error!rdf.TermId {
+    fn parseBlankNode(self: *LineParser, pool: *rdf.TermPool) ParseError!rdf.TermId {
         try self.expect('_');
         try self.expect(':');
         const start = self.index;
@@ -253,7 +256,7 @@ const LineParser = struct {
         return pool.internBlankNode(self.input[start..self.index]) catch |err| return mapTermError(err);
     }
 
-    fn parseLiteral(self: *LineParser, pool: *rdf.TermPool) Error!rdf.TermId {
+    fn parseLiteral(self: *LineParser, pool: *rdf.TermPool) ParseError!rdf.TermId {
         var lexical_form: std.ArrayList(u8) = .empty;
         defer lexical_form.deinit(self.allocator);
 
@@ -292,7 +295,7 @@ const LineParser = struct {
         return pool.internSimpleLiteral(lexical_form.items) catch |err| return mapTermError(err);
     }
 
-    fn parseLanguageTag(self: *LineParser) Error![]const u8 {
+    fn parseLanguageTag(self: *LineParser) ParseError![]const u8 {
         const start = self.index;
         while (self.peek()) |byte| {
             if (!std.ascii.isAlphabetic(byte)) break;
@@ -312,7 +315,7 @@ const LineParser = struct {
         return self.input[start..self.index];
     }
 
-    fn parseStringEscape(self: *LineParser, output: *std.ArrayList(u8)) Error!void {
+    fn parseStringEscape(self: *LineParser, output: *std.ArrayList(u8)) ParseError!void {
         const escaped = self.peek() orelse return error.InvalidSyntax;
         self.index += 1;
         const decoded: u8 = switch (escaped) {
@@ -333,7 +336,7 @@ const LineParser = struct {
         try output.append(self.allocator, decoded);
     }
 
-    fn parseUnicodeEscape(self: *LineParser, output: *std.ArrayList(u8)) Error!void {
+    fn parseUnicodeEscape(self: *LineParser, output: *std.ArrayList(u8)) ParseError!void {
         const marker = self.peek() orelse return error.InvalidSyntax;
         self.index += 1;
         const digits: usize = switch (marker) {
@@ -357,7 +360,7 @@ const LineParser = struct {
         try output.appendSlice(self.allocator, encoded[0..length]);
     }
 
-    fn skipEmptyLinesAndComments(self: *LineParser) Error!void {
+    fn skipEmptyLinesAndComments(self: *LineParser) ParseError!void {
         while (true) {
             self.skipHorizontalWhitespace();
             if (self.peek() == '#') self.skipComment();
@@ -380,12 +383,12 @@ const LineParser = struct {
         }
     }
 
-    fn consumeLineEndOrEof(self: *LineParser) Error!void {
+    fn consumeLineEndOrEof(self: *LineParser) ParseError!void {
         if (self.atEnd()) return;
         if (!(try self.consumeLineEnd())) return error.InvalidSyntax;
     }
 
-    fn consumeLineEnd(self: *LineParser) Error!bool {
+    fn consumeLineEnd(self: *LineParser) ParseError!bool {
         if (self.peek() == '\n') {
             self.index += 1;
             return true;
@@ -399,7 +402,7 @@ const LineParser = struct {
         return false;
     }
 
-    fn expect(self: *LineParser, expected: u8) Error!void {
+    fn expect(self: *LineParser, expected: u8) ParseError!void {
         if (self.peek() != expected) return error.InvalidSyntax;
         self.index += 1;
     }
@@ -460,7 +463,7 @@ fn isPnCharsBase(codepoint: u21) bool {
         (codepoint >= 0x10000 and codepoint <= 0xeffff);
 }
 
-fn mapTermError(err: rdf.Error) Error {
+fn mapTermError(err: rdf.Error) ParseError {
     return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => error.InvalidSyntax,
@@ -561,7 +564,7 @@ test "N-Triples serializer rejects unrepresentable blank-node identifiers" {
     const object = try graph.terms.internSimpleLiteral("object");
     _ = try graph.add(.{ .subject = subject, .predicate = predicate, .object = object });
     try std.testing.expectError(
-        error.InvalidNTriplesTerm,
+        error.InvalidBlankNodeLabel,
         serializeNTriplesAlloc(std.testing.allocator, &graph),
     );
 }

@@ -53,3 +53,7 @@ Whole-document parsing APIs return an owned graph and clean up partial state on 
 Malformed concrete syntax is reported as `InvalidSyntax`; malformed UTF-8 remains
 `InvalidUtf8`, and allocation failures remain `OutOfMemory`. This keeps syntax errors
 independent of lower-level term-constructor validation details.
+
+The stable whole-document line-syntax surface and its ownership rules are recorded in
+`docs/api.md`. Serializers preserve statement iteration order but do not perform graph
+canonicalization or blank-node relabeling.
