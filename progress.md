@@ -111,7 +111,9 @@ separate packages only after their APIs and release cycles become independently 
   collision-safe with source blank-node labels.
 - Non-empty blank-node property lists now expand recursively in subject and object
   positions, including nested lists with their own predicate and object lists.
-- The local suite has 38 tests; all 157 official N-Triples and N-Quads syntax cases
+- RDF collections now expand into `rdf:first`/`rdf:rest` chains ending in `rdf:nil`,
+  including empty collections and nested collection/property-list items.
+- The local suite has 40 tests; all 157 official N-Triples and N-Quads syntax cases
   continue to pass. Turtle conformance is not yet claimed.
 
 ## Milestone status
@@ -125,10 +127,11 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Add RDF collections, including nested collection and property-list values.
-2. Complete prefixed-name and Unicode name grammar coverage.
-3. Pin the official Turtle suite and drive the parser to full syntax/evaluation
-   conformance before adding serialization and TriG graph syntax.
+1. Pin the official Turtle suite and add a manifest-driven conformance runner.
+2. Use its failures to complete prefixed-name, Unicode name, and remaining grammar
+   edge-case coverage.
+3. Reach full Turtle syntax/evaluation conformance before adding serialization and TriG
+   graph syntax.
 
 ## Session log
 
@@ -285,3 +288,15 @@ separate packages only after their APIs and release cycles become independently 
 - Added semantic identity checks, malformed-list cases, and allocation-failure coverage
   using nested structures.
 - Passed all 38 local tests and retained all 157 official N-Triples/N-Quads cases.
+
+### 2026-10-24 — Turtle RDF collections
+
+- Added empty and non-empty collections in subject and object positions.
+- Expanded collection cells into `rdf:first` and `rdf:rest` statements ending in the
+  interned `rdf:nil` IRI.
+- Supported literals, resources, property lists, empty collections, and nested
+  collections as list items.
+- Preserved collision-safe blank-node generation for collection cells.
+- Added exact chain-identity, empty-list, nested-structure, malformed-input, and
+  allocation-failure coverage.
+- Passed all 40 local tests and retained all 157 official N-Triples/N-Quads cases.

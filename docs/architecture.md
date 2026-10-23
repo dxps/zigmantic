@@ -77,3 +77,7 @@ are tracked separately from source labels so an explicit label can never alias a
 anonymous node, including when its spelling matches the internal generation pattern.
 Non-empty property lists reuse the same predicate/object expansion routine recursively;
 their generated blank node is returned to the enclosing subject or object position.
+Collections are expanded during parsing into fresh blank-node cells connected by
+`rdf:first` and `rdf:rest`. Empty collections and the final rest link use the interned
+`rdf:nil` IRI. Collection items recurse through the normal object parser, so nested
+collections and property lists share the same ownership and identity rules.

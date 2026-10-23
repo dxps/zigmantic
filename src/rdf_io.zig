@@ -20,8 +20,8 @@ pub const TurtleOptions = struct {
 
 /// Parses the currently implemented RDF 1.1 Turtle subset into an owned graph.
 /// Directives, resources, RDF literal forms, labeled and anonymous blank nodes, and
-/// predicate/object lists and nested blank-node property lists are supported.
-/// Collections are added incrementally.
+/// predicate/object lists, nested blank-node property lists, and RDF collections are
+/// supported. Remaining grammar coverage is added incrementally.
 pub fn parseTurtle(
     allocator: std.mem.Allocator,
     input: []const u8,
@@ -179,6 +179,8 @@ const TurtleToken = struct {
         comma,
         left_bracket,
         right_bracket,
+        left_parenthesis,
+        right_parenthesis,
         dot,
         eof,
     };
@@ -218,6 +220,14 @@ const TurtleLexer = struct {
             ']' => {
                 self.index += 1;
                 return .{ .tag = .right_bracket, .lexeme = self.input[start..self.index] };
+            },
+            '(' => {
+                self.index += 1;
+                return .{ .tag = .left_parenthesis, .lexeme = self.input[start..self.index] };
+            },
+            ')' => {
+                self.index += 1;
+                return .{ .tag = .right_parenthesis, .lexeme = self.input[start..self.index] };
             },
             '"', '\'' => return self.scanString(),
             '^' => {
@@ -394,7 +404,7 @@ const TurtleParser = struct {
                 .base => try self.parseBaseDirective(false),
                 .at_prefix => try self.parsePrefixDirective(true),
                 .prefix => try self.parsePrefixDirective(false),
-                .iri_ref, .prefixed_name, .blank_node_label, .left_bracket => try self.parseTriple(graph, first),
+                .iri_ref, .prefixed_name, .blank_node_label, .left_bracket, .left_parenthesis => try self.parseTriple(graph, first),
                 else => return error.InvalidSyntax,
             }
         }
@@ -494,6 +504,7 @@ const TurtleParser = struct {
     ) ParseError!rdf.TermId {
         if (token.tag == .blank_node_label) return self.parseBlankNode(&graph.terms, token.lexeme);
         if (token.tag == .left_bracket) return self.parseBlankNodePropertyList(graph);
+        if (token.tag == .left_parenthesis) return self.parseCollection(graph);
         return self.parseResource(&graph.terms, token);
     }
 
@@ -505,6 +516,7 @@ const TurtleParser = struct {
         return switch (token.tag) {
             .blank_node_label => self.parseBlankNode(&graph.terms, token.lexeme),
             .left_bracket => self.parseBlankNodePropertyList(graph),
+            .left_parenthesis => self.parseCollection(graph),
             .string_literal => self.parseStringLiteral(&graph.terms, token.lexeme),
             .integer => self.parseTypedLiteral(&graph.terms, token.lexeme, rdf.xsd_namespace ++ "integer"),
             .decimal => self.parseTypedLiteral(&graph.terms, token.lexeme, rdf.xsd_namespace ++ "decimal"),
@@ -539,6 +551,36 @@ const TurtleParser = struct {
         if (first.tag == .right_bracket) return blank_node;
         try self.parsePredicateObjectList(graph, blank_node, first, .right_bracket);
         return blank_node;
+    }
+
+    fn parseCollection(self: *TurtleParser, graph: *rdf.Graph) ParseError!rdf.TermId {
+        const nil = graph.terms.internNamedNode(rdf.rdf_namespace ++ "nil") catch |err|
+            return mapTermError(err);
+        var item_token = try self.nextToken();
+        if (item_token.tag == .right_parenthesis) return nil;
+
+        const first_predicate = graph.terms.internNamedNode(rdf.rdf_namespace ++ "first") catch |err|
+            return mapTermError(err);
+        const rest_predicate = graph.terms.internNamedNode(rdf.rdf_namespace ++ "rest") catch |err|
+            return mapTermError(err);
+        const head = try self.freshBlankNode(&graph.terms);
+        var current = head;
+
+        while (true) {
+            const item = try self.parseObject(graph, item_token);
+            const next = try self.nextToken();
+            try self.addTriple(graph, current, first_predicate, item);
+
+            if (next.tag == .right_parenthesis) {
+                try self.addTriple(graph, current, rest_predicate, nil);
+                return head;
+            }
+
+            const tail = try self.freshBlankNode(&graph.terms);
+            try self.addTriple(graph, current, rest_predicate, tail);
+            current = tail;
+            item_token = next;
+        }
     }
 
     fn freshBlankNode(self: *TurtleParser, pool: *rdf.TermPool) ParseError!rdf.TermId {
@@ -1582,6 +1624,66 @@ test "Turtle expands nested blank-node property lists" {
     );
 }
 
+test "Turtle expands RDF collections and nested structures" {
+    const input =
+        "@prefix ex: <https://example.com/> .\n" ++
+        "ex:s ex:list (ex:first \"second\" [ ex:name \"third\" ] ()) .\n" ++
+        "(ex:left (ex:nested)) ex:kind ex:ListSubject .\n";
+    var graph = try parseTurtle(std.testing.allocator, input, .{});
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 17), graph.len());
+    const head = graph.items()[0].subject;
+    try std.testing.expectEqualStrings(
+        rdf.rdf_namespace ++ "first",
+        graph.terms.view(graph.items()[0].predicate).?.named_node,
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.com/first",
+        graph.terms.view(graph.items()[0].object).?.named_node,
+    );
+
+    const second_cell = graph.items()[1].object;
+    try std.testing.expectEqual(second_cell, graph.items()[2].subject);
+    try std.testing.expectEqualStrings(
+        "second",
+        graph.terms.view(graph.items()[2].object).?.literal.lexical_form,
+    );
+
+    const property_node = graph.items()[4].subject;
+    try std.testing.expectEqual(property_node, graph.items()[5].object);
+    try std.testing.expectEqualStrings(
+        "third",
+        graph.terms.view(graph.items()[4].object).?.literal.lexical_form,
+    );
+
+    const nil = graph.terms.view(graph.items()[7].object).?.named_node;
+    try std.testing.expectEqualStrings(rdf.rdf_namespace ++ "nil", nil);
+    try std.testing.expectEqualStrings(
+        rdf.rdf_namespace ++ "nil",
+        graph.terms.view(graph.items()[8].object).?.named_node,
+    );
+    try std.testing.expectEqual(head, graph.items()[9].object);
+
+    const nested_head = graph.items()[12].subject;
+    try std.testing.expectEqual(nested_head, graph.items()[14].object);
+    try std.testing.expectEqual(graph.items()[10].subject, graph.items()[16].subject);
+}
+
+test "Turtle represents an empty collection as rdf:nil" {
+    const input =
+        "@prefix ex: <https://example.com/> . () ex:sameAs () .";
+    var graph = try parseTurtle(std.testing.allocator, input, .{});
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), graph.len());
+    try std.testing.expectEqual(graph.items()[0].subject, graph.items()[0].object);
+    try std.testing.expectEqualStrings(
+        rdf.rdf_namespace ++ "nil",
+        graph.terms.view(graph.items()[0].subject).?.named_node,
+    );
+}
+
 test "Turtle rejects invalid directives and unresolved names" {
     const invalid = [_][]const u8{
         "<relative> <https://example.com/p> <https://example.com/o> .",
@@ -1601,6 +1703,11 @@ test "Turtle rejects invalid directives and unresolved names" {
         "@prefix ex: <https://example.com/> . ex:s ex:p [ ex:q ] .",
         "@prefix ex: <https://example.com/> . ex:s ex:p [ ex:q ex:o .",
         "@prefix ex: <https://example.com/> . ex:s ex:p [ .",
+        "@prefix ex: <https://example.com/> . ex:s ex:p ( .",
+        "@prefix ex: <https://example.com/> . ex:s ex:p (ex:a ] .",
+        "@prefix ex: <https://example.com/> . ex:s ex:p (ex:a, ex:b) .",
+        "@prefix ex: <https://example.com/> . ex:s ex:p (ex:a",
+        "@prefix ex: <https://example.com/> . ) ex:p ex:o .",
     };
     for (invalid) |input| {
         try std.testing.expectError(
@@ -1615,7 +1722,7 @@ fn exerciseTurtleAllocations(allocator: std.mem.Allocator) !void {
         allocator,
         "@base <https://example.com/> . @prefix ex: <vocab/> . " ++
             "[ ex:name \"Bună\\nziua\"@ro ; ex:knows [ ex:name \"Salut\" ] ] " ++
-            "a ex:Thing .",
+            "a ex:Thing ; ex:items (ex:first [ ex:name \"nested\" ] ()) .",
         .{},
     );
     defer graph.deinit();

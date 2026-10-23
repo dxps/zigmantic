@@ -40,13 +40,15 @@ containing-document base. The parser supports `@base`, `@prefix`, `BASE`, and `P
 directives; relative IRI references; default and named prefixed names; `a`; comments;
 labeled blank nodes; all four quoted-string forms; language and datatype suffixes; and
 integer, decimal, double, and boolean literals. Predicate lists (`;`), object lists
-(`,`), trailing predicate separators, anonymous blank nodes (`[]`), and nested
-blank-node property lists expand directly into graph triples.
+(`,`), trailing predicate separators, anonymous blank nodes (`[]`), nested blank-node
+property lists, and RDF collections expand directly into graph triples. Collections use
+the standard `rdf:first`/`rdf:rest` chain and terminate in `rdf:nil`; `()` is `rdf:nil`
+itself.
 
 The returned graph owns all parsed terms and follows the same lifetime and error rules
-as `parseNTriples`. The current API is deliberately marked as a subset: collections,
-complete prefixed-name grammar coverage, and the official Turtle conformance suite
-remain before Turtle conformance can be claimed.
+as `parseNTriples`. The current API is deliberately marked as a subset: complete
+prefixed-name and Unicode name grammar coverage, remaining syntax edge cases, and the
+official Turtle conformance suite remain before Turtle conformance can be claimed.
 
 ## IRI references
 
