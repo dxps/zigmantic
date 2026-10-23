@@ -75,3 +75,5 @@ Turtle predicate and object lists are expanded while parsing and do not require 
 intermediate syntax tree. Empty `[]` forms allocate fresh blank nodes. Generated labels
 are tracked separately from source labels so an explicit label can never alias an
 anonymous node, including when its spelling matches the internal generation pattern.
+Non-empty property lists reuse the same predicate/object expansion routine recursively;
+their generated blank node is returned to the enclosing subject or object position.

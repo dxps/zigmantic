@@ -109,7 +109,9 @@ separate packages only after their APIs and release cycles become independently 
 - Predicate lists, object lists, trailing predicate separators, and empty anonymous
   blank nodes now expand directly into graph triples. Anonymous-node allocation is
   collision-safe with source blank-node labels.
-- The local suite has 37 tests; all 157 official N-Triples and N-Quads syntax cases
+- Non-empty blank-node property lists now expand recursively in subject and object
+  positions, including nested lists with their own predicate and object lists.
+- The local suite has 38 tests; all 157 official N-Triples and N-Quads syntax cases
   continue to pass. Turtle conformance is not yet claimed.
 
 ## Milestone status
@@ -123,8 +125,8 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Add non-empty blank-node property lists and nested structures.
-2. Add RDF collections and complete prefixed-name grammar coverage.
+1. Add RDF collections, including nested collection and property-list values.
+2. Complete prefixed-name and Unicode name grammar coverage.
 3. Pin the official Turtle suite and drive the parser to full syntax/evaluation
    conformance before adding serialization and TriG graph syntax.
 
@@ -272,3 +274,14 @@ separate packages only after their APIs and release cycles become independently 
 - Added malformed-list, unsupported-property-list, identity, expansion-order, and
   allocation-failure coverage.
 - Passed all 37 local tests and retained all 157 official N-Triples/N-Quads cases.
+
+### 2026-10-24 — Turtle blank-node property lists
+
+- Reused the predicate/object expansion routine for top-level statements and property
+  lists so their separator behavior remains identical.
+- Added non-empty property lists in both subject and object positions.
+- Added recursive nesting with stable links between enclosing and nested blank nodes.
+- Preserved empty `[]` behavior and collision-safe generated identifiers.
+- Added semantic identity checks, malformed-list cases, and allocation-failure coverage
+  using nested structures.
+- Passed all 38 local tests and retained all 157 official N-Triples/N-Quads cases.
