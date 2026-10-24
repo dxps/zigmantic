@@ -487,7 +487,7 @@ const TurtleParser = struct {
                 .base => try self.parseBaseDirective(false),
                 .at_prefix => try self.parsePrefixDirective(true),
                 .prefix => try self.parsePrefixDirective(false),
-                .iri_ref, .prefixed_name, .blank_node_label, .left_bracket, .left_parenthesis => try self.parseTriple(target, first),
+                .iri_ref, .prefixed_name, .blank_node_label, .left_bracket, .left_parenthesis => try self.parseTriple(target, first, null),
                 else => return error.InvalidSyntax,
             }
         }
@@ -520,10 +520,24 @@ const TurtleParser = struct {
                         try self.parseGraphBlock(dataset, .{ .named = graph_name });
                     } else {
                         const subject = try self.parseSubject(&default_target, first);
-                        try self.parseTripleAfterSubject(&default_target, subject, next);
+                        try self.parseTripleAfterSubject(&default_target, subject, next, null);
                     }
                 },
-                .left_bracket, .left_parenthesis => try self.parseTriple(&default_target, first),
+                .left_bracket => {
+                    const property_list = try self.parseBlankNodePropertyList(&default_target);
+                    const next = try self.nextToken();
+                    if (!property_list.nonempty and next.tag == .left_brace) {
+                        try self.parseGraphBlock(dataset, .{ .named = property_list.id });
+                    } else {
+                        try self.parseTripleAfterSubject(
+                            &default_target,
+                            .{ .id = property_list.id, .standalone = property_list.nonempty },
+                            next,
+                            null,
+                        );
+                    }
+                },
+                .left_parenthesis => try self.parseTriple(&default_target, first, null),
                 else => return error.InvalidSyntax,
             }
         }
@@ -547,7 +561,7 @@ const TurtleParser = struct {
                 .base => try self.parseBaseDirective(false),
                 .at_prefix => try self.parsePrefixDirective(true),
                 .prefix => try self.parsePrefixDirective(false),
-                .iri_ref, .prefixed_name, .blank_node_label, .left_bracket, .left_parenthesis => try self.parseTriple(&target, first),
+                .iri_ref, .prefixed_name, .blank_node_label, .left_bracket, .left_parenthesis => try self.parseTriple(&target, first, .right_brace),
                 else => return error.InvalidSyntax,
             }
         }
@@ -559,6 +573,10 @@ const TurtleParser = struct {
         token: TurtleToken,
     ) ParseError!rdf.TermId {
         if (token.tag == .blank_node_label) return self.parseBlankNode(pool, token.lexeme);
+        if (token.tag == .left_bracket) {
+            try self.expect(.right_bracket);
+            return self.freshBlankNode(pool);
+        }
         return self.parseResource(pool, token);
     }
 
@@ -597,10 +615,11 @@ const TurtleParser = struct {
         self: *TurtleParser,
         target: *StatementTarget,
         subject_token: TurtleToken,
+        alternate_terminator: ?TurtleToken.Tag,
     ) ParseError!void {
         const subject = try self.parseSubject(target, subject_token);
         const predicate_token = try self.nextToken();
-        try self.parseTripleAfterSubject(target, subject, predicate_token);
+        try self.parseTripleAfterSubject(target, subject, predicate_token, alternate_terminator);
     }
 
     fn parseTripleAfterSubject(
@@ -608,12 +627,24 @@ const TurtleParser = struct {
         target: *StatementTarget,
         subject: ParsedSubject,
         predicate_token: TurtleToken,
+        alternate_terminator: ?TurtleToken.Tag,
     ) ParseError!void {
         if (predicate_token.tag == .dot) {
             if (subject.standalone) return;
             return error.InvalidSyntax;
         }
-        try self.parsePredicateObjectList(target, subject.id, predicate_token, .dot);
+        if (alternate_terminator == predicate_token.tag) {
+            if (!subject.standalone) return error.InvalidSyntax;
+            self.lookahead = predicate_token;
+            return;
+        }
+        try self.parsePredicateObjectList(
+            target,
+            subject.id,
+            predicate_token,
+            .dot,
+            alternate_terminator,
+        );
     }
 
     fn parsePredicateObjectList(
@@ -622,6 +653,7 @@ const TurtleParser = struct {
         subject: rdf.TermId,
         first_predicate: TurtleToken,
         terminator: TurtleToken.Tag,
+        alternate_terminator: ?TurtleToken.Tag,
     ) ParseError!void {
         var predicate_token = first_predicate;
         while (true) {
@@ -639,10 +671,18 @@ const TurtleParser = struct {
             }
 
             if (separator.tag == terminator) return;
+            if (alternate_terminator == separator.tag) {
+                self.lookahead = separator;
+                return;
+            }
             if (separator.tag != .semicolon) return error.InvalidSyntax;
 
             while (separator.tag == .semicolon) separator = try self.nextToken();
             if (separator.tag == terminator) return;
+            if (alternate_terminator == separator.tag) {
+                self.lookahead = separator;
+                return;
+            }
             predicate_token = separator;
         }
     }
@@ -729,7 +769,7 @@ const TurtleParser = struct {
         const blank_node = try self.freshBlankNode(target.terms());
         const first = try self.nextToken();
         if (first.tag == .right_bracket) return .{ .id = blank_node, .nonempty = false };
-        try self.parsePredicateObjectList(target, blank_node, first, .right_bracket);
+        try self.parsePredicateObjectList(target, blank_node, first, .right_bracket, null);
         return .{ .id = blank_node, .nonempty = true };
     }
 
@@ -2011,6 +2051,51 @@ test "TriG parses default and named graph blocks" {
 
     const shared = dataset.items()[4].subject;
     try std.testing.expectEqual(shared, dataset.items()[5].object);
+}
+
+test "TriG permits an omitted dot before a graph block closing brace" {
+    const input =
+        "@prefix ex: <https://example.com/> .\n" ++
+        "{ ex:s ex:p ex:o }\n" ++
+        "GRAPH ex:first { ex:s ex:p ex:o ; }\n" ++
+        "ex:second { [ ex:p ex:o ] }\n" ++
+        "ex:third { ex:s ex:p [ ex:q ex:o ], ex:other }";
+    var dataset = try parseTriG(std.testing.allocator, input, .{});
+    defer dataset.deinit();
+
+    try std.testing.expectEqual(@as(usize, 6), dataset.len());
+    try std.testing.expectEqual(rdf.GraphName.default, dataset.items()[0].graph_name);
+    try std.testing.expectEqualStrings(
+        "https://example.com/first",
+        dataset.terms.view(dataset.items()[1].graph_name.named).?.named_node,
+    );
+}
+
+test "TriG supports anonymous blank-node graph names" {
+    const input =
+        "@prefix ex: <https://example.com/> .\n" ++
+        "[] { ex:s ex:p ex:o }\n" ++
+        "GRAPH [] { ex:s ex:p ex:other }";
+    var dataset = try parseTriG(std.testing.allocator, input, .{});
+    defer dataset.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), dataset.len());
+    const first_name = dataset.items()[0].graph_name.named;
+    const second_name = dataset.items()[1].graph_name.named;
+    try std.testing.expect(dataset.terms.view(first_name).? == .blank_node);
+    try std.testing.expect(dataset.terms.view(second_name).? == .blank_node);
+    try std.testing.expect(first_name != second_name);
+}
+
+test "Turtle still requires a dot after a top-level triple" {
+    try std.testing.expectError(
+        error.InvalidSyntax,
+        parseTurtle(
+            std.testing.allocator,
+            "<https://example.com/s> <https://example.com/p> <https://example.com/o>",
+            .{},
+        ),
+    );
 }
 
 test "TriG rejects malformed graph blocks" {

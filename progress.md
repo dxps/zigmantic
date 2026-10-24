@@ -130,9 +130,9 @@ separate packages only after their APIs and release cycles become independently 
   same pinned W3C revision as the other RDF syntax suites.
 - The TriG manifest runner executes all 357 syntax and evaluation entries. Evaluation
   uses dataset isomorphism, including blank-node graph names.
-- The current TriG baseline is 338 passing cases and 19 exact expected failures. TriG
+- The current TriG baseline is 352 passing cases and 5 exact expected failures. TriG
   conformance is not yet claimed.
-- The local suite has 46 tests; all 470 previously integrated official cases continue
+- The local suite has 49 tests; all 470 previously integrated official cases continue
   to pass alongside the executable TriG baseline.
 
 ## Milestone status
@@ -146,7 +146,7 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Resolve the 19 TriG baseline failures by grammar cluster, removing each passing ID.
+1. Reject directives inside graph blocks and resolve the minimal-whitespace TriG case.
 2. Reach a zero-exclusion pass of all 357 official TriG cases.
 3. Add deterministic expanded TriG serialization and dataset round-trip coverage.
 
@@ -378,3 +378,16 @@ separate packages only after their APIs and release cycles become independently 
 - Established an executable baseline of 338 passing cases and 19 exact known failures;
   regressions and newly passing cases both require deliberate baseline updates.
 - Retained all 46 local tests and all 470 previously integrated official cases.
+
+### 2026-10-24 — TriG graph-block grammar
+
+- Accepted the optional final triple dot before a graph block's closing brace without
+  relaxing the required top-level Turtle terminator.
+- Accepted trailing predicate semicolons before a graph block closes.
+- Supported anonymous blank-node graph names in compact and `GRAPH []` forms with a
+  fresh identity for every occurrence.
+- Added focused coverage for omitted dots, property-list statements, anonymous graph
+  identity, and the preserved Turtle boundary.
+- Removed 14 cases from the executable failure baseline, leaving 352 of 357 official
+  TriG cases passing and five exact failures.
+- Passed all 49 local tests and retained all 470 other official RDF cases.
