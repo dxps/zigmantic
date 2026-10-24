@@ -27,10 +27,16 @@ The RDF 1.1 TriG suite is:
 - Normative specification: <https://www.w3.org/TR/2014/REC-trig-20140225/>
 - Published test suite: <https://w3c.github.io/rdf-tests/rdf/rdf11/rdf-trig/>
 
+The RDF 1.1 model-theory suite is:
+`rdf/rdf11/rdf-mt/manifest.ttl`.
+
+- Normative specification: <https://www.w3.org/TR/2014/REC-rdf11-mt-20140225/>
+- Published test suite: <https://w3c.github.io/rdf-tests/rdf/rdf11/rdf-mt/>
+
 The RDF 1.1 N-Triples and N-Quads suites are pinned and imported under
-`rdf11-ntriples`, `rdf11-nquads`, `rdf11-turtle`, and `rdf11-trig`. Each `UPSTREAM.md`
-records the exact revision and import scope. Imported files retain the upstream
-test-suite license and must not be modified to make tests pass.
+`rdf11-ntriples`, `rdf11-nquads`, `rdf11-turtle`, `rdf11-trig`, and `rdf11-mt`.
+Each `UPSTREAM.md` records the exact revision and import scope. Imported files retain
+the upstream test-suite license and must not be modified to make tests pass.
 
 `zig build test` runs every manifest entry and asserts the expected count, so a refresh
 cannot silently omit cases.
@@ -44,3 +50,9 @@ The TriG runner likewise executes syntax and evaluation entries. Evaluation data
 are compared by RDF dataset isomorphism, including blank nodes used as graph names. Its
 executable expected-failure list is currently empty; all 357 manifest entries pass, and
 any regression fails the build.
+
+The model-theory runner executes all 51 positive and negative entailment entries across
+the simple, RDF, and RDFS regimes. Graph-valued conclusions use existential blank-node
+matching. A `false` result represents an inconsistent premise, which the current engine
+does not yet detect. The executable baseline has 29 passing cases and 22 exact expected
+failures; regressions and newly passing cases both fail the build until reviewed.

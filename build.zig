@@ -53,10 +53,21 @@ pub fn build(b: *std.Build) void {
     });
     const run_trig_conformance_tests = b.addRunArtifact(trig_conformance_tests);
 
+    const entailment_conformance_module = b.createModule(.{
+        .root_source_file = b.path("tests/entailment_conformance.zig"),
+        .target = target,
+    });
+    entailment_conformance_module.addImport("zigmantic", zigmantic);
+    const entailment_conformance_tests = b.addTest(.{
+        .root_module = entailment_conformance_module,
+    });
+    const run_entailment_conformance_tests = b.addRunArtifact(entailment_conformance_tests);
+
     const test_step = b.step("test", "Run all Zigmantic tests");
     test_step.dependOn(&run_library_tests.step);
     test_step.dependOn(&run_ntriples_conformance_tests.step);
     test_step.dependOn(&run_nquads_conformance_tests.step);
     test_step.dependOn(&run_turtle_conformance_tests.step);
     test_step.dependOn(&run_trig_conformance_tests.step);
+    test_step.dependOn(&run_entailment_conformance_tests.step);
 }

@@ -147,7 +147,13 @@ separate packages only after their APIs and release cycles become independently 
   term scope, indexed union, and distinct asserted/inferred provenance.
 - The first atomic RDF rule layer adds all eight fixed non-container axiomatic triples
   and applies `rdfD2` predicate-property inference idempotently.
-- The local suite has 71 tests; all 827 integrated official RDF cases pass.
+- The official RDF 1.1 model-theory manifest and its referenced premise/conclusion files
+  are vendored at the same pinned W3C revision as the syntax suites.
+- The model-theory runner covers all 51 simple, RDF, and RDFS entailment entries with
+  existential blank-node matching and an exact expected-failure baseline.
+- The current semantic baseline passes 29 cases and tracks 22 failures covering the
+  unimplemented datatype, container-membership, inconsistency, and RDFS behavior.
+- The local suite has 71 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -162,9 +168,11 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Pin and integrate the official RDF model-theory entailment suite.
-2. Add target-aware container axioms and datatype pattern `rdfD1` as required by tests.
-3. Extend the rule engine to RDFS entailment and standard test coverage.
+1. Add target-aware `rdf:_n` container-membership axioms required by conclusions.
+2. Implement datatype interpretation, lexical validation, value equality, and
+   inconsistency detection incrementally against the exact failing cases.
+3. Extend the rule engine to RDFS entailment and remove newly passing cases from the
+   executable baseline.
 
 ## Session log
 
@@ -521,3 +529,16 @@ separate packages only after their APIs and release cycles become independently 
   this initial layer rather than overstating closure completeness.
 - Added empty-graph axiom, predicate inference, idempotence, and allocation-failure
   coverage while retaining all 827 existing official RDF cases.
+
+### 2026-10-24 — RDF model-theory conformance harness
+
+- Pinned and vendored the official RDF 1.1 model-theory manifest, its referenced
+  premise/conclusion graphs, provenance, and license at the existing W3C revision.
+- Added a manifest runner for all 51 positive and negative simple, RDF, and RDFS
+  entailment entries.
+- Added existential blank-node matching for graph-valued conclusions and routed RDF
+  and RDFS cases through the current RDF materialization layer.
+- Represented `false` conclusions as consistency checks while explicitly recording that
+  datatype inconsistency detection is not implemented yet.
+- Established an executable baseline of 29 passing cases and 22 exact known failures;
+  regressions and newly passing cases both require deliberate baseline updates.
