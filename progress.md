@@ -153,17 +153,19 @@ separate packages only after their APIs and release cycles become independently 
   existential blank-node matching and an exact expected-failure baseline.
 - Target-aware `rdf:_n` axioms plus the directly corresponding `rdfs12` and `rdfs7`
   consequences implement RDFS container-membership semantics.
-- The finite non-container RDFS axioms and all `rdfs1`–`rdfs13` rule patterns now run to
-  a transactional fixed point for ordinary RDF triples.
+- The finite non-container RDFS axioms and all `rdfs1`–`rdfs13` rule patterns run to a
+  transactional fixed point for ordinary RDF triples, while entailment uses a separate
+  generalized closure for temporary literal subjects and blank-node predicates.
 - Mandatory `xsd:string` and `rdf:langString` consistency detects malformed language
-  strings and disjoint RDFS range constraints without recognizing optional datatypes.
+  strings, disjoint range constraints, and incompatible direct or generalized datatype
+  class memberships without recognizing optional datatypes.
 - Manifest-declared profiles now enable `xsd:integer`, `xsd:int`, and
   `rdf:XMLLiteral` lexical, value-space, and range consistency checks; XML literal
   lexical validation covers well-balanced XML 1.0 content and XML Namespaces 1.0.
 - Recognized `xsd:decimal`, `xsd:float`, and `xsd:double` values now compare by semantic
   value, including decimal canonicalization and IEEE-754 rounding behavior.
-- Virtual generalized datatype facts now support `rdfD1` existential conclusions
-  without admitting literal subjects into ordinary RDF graphs.
+- An internal generalized RDF closure implements `GrdfD1`, `rdfD2`, and `rdfs1`–`rdfs13`
+  to exhaustion without admitting generalized triples into public RDF graphs or stores.
 - Public `entailsGraph` and `isGraphConsistent` APIs now compose simple, RDF, and RDFS
   behavior; the official runner contains no separate reasoning implementation.
 - Plain RDF entailment now includes conclusion-directed `rdf:_n` property axioms.
@@ -172,7 +174,7 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 100 tests; all 827 integrated syntax/evaluation cases still pass.
+- The local suite has 105 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -181,18 +183,15 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 3 — N-Triples and N-Quads: complete.
 - Milestone 4 — Turtle and TriG: complete.
 - Milestone 5 — indexed in-memory quad store: complete.
-- Milestone 6 — RDF/RDFS semantics and entailment: in progress; the materialization
-  boundary, RDF core, container membership, and general RDFS rules are implemented;
-  mandatory and recognized-datatype consistency, numeric value equivalence, and the
-  official model-theory suite are implemented; API consolidation and completeness audit
-  remain.
+- Milestone 6 — RDF/RDFS semantics and entailment: complete for the RDF 1.1 required
+  datatype set; optional recognized-datatype profiles cover only the datatypes explicitly
+  exposed by `DatatypeProfile`.
 - Milestones 7–14: not started.
 
 ## Next actions
 
-1. Audit generalized RDF intermediate requirements and normative semantics beyond
-   the official suite before declaring milestone 6 complete.
-2. Add fuzzing for entailment matching and rule-closure invariants.
+1. Add property and fuzz testing for entailment matching and rule-closure invariants.
+2. Begin milestone 7 with SPARQL 1.1 tokenizer, parser, and algebra boundaries.
 
 ## Session log
 
@@ -687,3 +686,25 @@ separate packages only after their APIs and release cycles become independently 
 - Added focused positive, negative, namespace, and exhaustive allocation-failure tests.
 - Passed all 48 model-theory cases, 827 syntax/evaluation cases, and 100 local tests;
   the complete build now runs 105 tests.
+
+### 2026-10-24 — Generalized RDF/RDFS completeness audit
+
+- Audited the graph entailment implementation against the normative RDF and RDFS
+  semantic conditions and the complete generalized-closure construction in RDF 1.1
+  Semantics.
+- Added an entailment-private generalized triple set so `GrdfD1`, `rdfD2`, and
+  `rdfs1`–`rdfs13` can derive through literal subjects and blank-node predicates without
+  weakening the public RDF graph or store invariants.
+- Replaced the special-case virtual `rdfD1` matcher with ordinary existential matching
+  over the complete generalized closure.
+- Made repeated conclusion blank nodes treat distinct recognized literal terms with the
+  same datatype value as the same semantic value.
+- Extended consistency checking to reject incompatible datatype memberships on named
+  and blank resources, including memberships produced through generalized RDFS rules.
+- Added cases for the specification's blank-predicate derivation shape, generalized
+  literal-subject propagation, shared decimal values, and disjoint mandatory datatype
+  classes beyond the official suite.
+- Declared milestone 6 complete for RDF 1.1's required datatype set while retaining the
+  explicit, opt-in scope of additional recognized datatypes.
+- Passed all 48 model-theory cases, 827 syntax/evaluation cases, and 105 local tests;
+  the complete build now runs 110 tests.
