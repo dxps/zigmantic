@@ -15,7 +15,6 @@ test "W3C RDF 1.1 model-theory entailment manifest" {
             "pfps-10-non-well-formed-literal-1",
             "rdfs-entailment-test001",
             "rdfs-entailment-test002",
-            "rdfs-subPropertyOf-semantics-test001",
             "xmlsch-02-whitespace-facet-2",
             "xmlsch-02-whitespace-facet-3",
             "xmlsch-02-whitespace-facet-4",

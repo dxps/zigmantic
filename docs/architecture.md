@@ -154,4 +154,11 @@ procedure instantiates the infinite `rdf:_n` axiom family toward the graph being
 It also includes membership IRIs already present in the source, recognizes only positive
 decimal indices without leading zeroes, and applies the directly corresponding `rdfs12`
 and `rdfs7` consequences. Its additions are independently transactional and idempotent.
-Datatype interpretation and general RDFS fixed-point rules remain separate concerns.
+
+The general RDFS layer adds the 38 finite non-container axiomatic triples plus the two
+mandatory datatype-class facts, then evaluates `rdfs1` through `rdfs13` against stable
+per-round snapshots until no triple is added. All additions share one transaction, so an
+allocation failure rolls the layer back. Conclusions that require generalized RDF
+intermediates are intentionally skipped because the core graph type enforces ordinary
+RDF subject and predicate positions. Datatype value interpretation and inconsistency
+detection remain separate concerns.

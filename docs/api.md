@@ -173,7 +173,15 @@ adds their RDF/RDFS type, domain, range, and `rdfs:subPropertyOf rdfs:member` fa
 propagates matching membership assertions through `rdfs:member`. If neither graph names
 one, it uses `rdf:_1` as the closure witness required by RDF 1.1 Semantics. The update is
 atomic and idempotent. Datatype pattern `rdfD1` and general RDFS closure remain separate,
-so these APIs do not yet claim complete RDF or RDFS entailment.
+so this API alone does not claim complete RDFS entailment.
+
+`materializeRdfsCore` adds all finite non-container RDFS axiomatic triples, recognizes
+the mandatory `rdf:langString` and `xsd:string` datatype IRIs for `rdfs1`, and applies
+`rdfs1` through `rdfs13` repeatedly to a fixed point. Call it after `materializeRdfCore`
+and, for conclusion-directed closure, `materializeRdfsContainerMembership`. It emits
+only ordinary RDF triples: generalized intermediate triples requiring literal subjects
+or non-IRI predicates are not represented by the current RDF data model. Datatype value
+interpretation and inconsistency detection remain separate layers.
 
 ## IRI references
 

@@ -139,6 +139,7 @@ fn runCase(comptime suite_dir: []const u8, case: Case) !bool {
         if (expected) |*target| {
             _ = try entailment.materializeRdfsContainerMembership(&actual, target);
         }
+        _ = try entailment.materializeRdfsCore(&actual);
     }
 
     const entailed = if (expected) |*target|

@@ -287,6 +287,303 @@ pub fn materializeRdfsContainerMembership(
     return .{ .inferred = inferred };
 }
 
+/// Adds the finite non-container RDFS axiomatic triples and applies the
+/// `rdfs1` through `rdfs13` entailment patterns to a fixed point. Only
+/// conclusions representable as ordinary RDF triples are materialized;
+/// generalized intermediate triples remain outside the RDF graph model.
+/// The triple update is atomic and idempotent.
+pub fn materializeRdfsCore(materialization: *Materialization) store_mod.Error!MaterializeResult {
+    const pool = materialization.termPool();
+    const rdf_type = try pool.internNamedNode(rdf.rdf_namespace ++ "type");
+    const rdf_property = try pool.internNamedNode(rdf.rdf_namespace ++ "Property");
+    const rdf_statement = try pool.internNamedNode(rdf.rdf_namespace ++ "Statement");
+    const rdf_list = try pool.internNamedNode(rdf.rdf_namespace ++ "List");
+    const rdfs_domain = try pool.internNamedNode(rdf.rdfs_namespace ++ "domain");
+    const rdfs_range = try pool.internNamedNode(rdf.rdfs_namespace ++ "range");
+    const rdfs_resource = try pool.internNamedNode(rdf.rdfs_namespace ++ "Resource");
+    const rdfs_literal = try pool.internNamedNode(rdf.rdfs_namespace ++ "Literal");
+    const rdfs_datatype = try pool.internNamedNode(rdf.rdfs_namespace ++ "Datatype");
+    const rdfs_class = try pool.internNamedNode(rdf.rdfs_namespace ++ "Class");
+    const rdfs_sub_class_of = try pool.internNamedNode(rdf.rdfs_namespace ++ "subClassOf");
+    const rdfs_sub_property_of = try pool.internNamedNode(rdf.rdfs_namespace ++ "subPropertyOf");
+    const rdfs_member = try pool.internNamedNode(rdf.rdfs_namespace ++ "member");
+    const rdfs_container = try pool.internNamedNode(rdf.rdfs_namespace ++ "Container");
+    const rdfs_container_membership_property = try pool.internNamedNode(
+        rdf.rdfs_namespace ++ "ContainerMembershipProperty",
+    );
+    const rdfs_see_also = try pool.internNamedNode(rdf.rdfs_namespace ++ "seeAlso");
+
+    const domain_axioms = [_]struct { subject: rdf.TermId, object: rdf.TermId }{
+        .{ .subject = rdf_type, .object = rdfs_resource },
+        .{ .subject = rdfs_domain, .object = rdf_property },
+        .{ .subject = rdfs_range, .object = rdf_property },
+        .{ .subject = rdfs_sub_property_of, .object = rdf_property },
+        .{ .subject = rdfs_sub_class_of, .object = rdfs_class },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "subject"), .object = rdf_statement },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "predicate"), .object = rdf_statement },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "object"), .object = rdf_statement },
+        .{ .subject = rdfs_member, .object = rdfs_resource },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "first"), .object = rdf_list },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "rest"), .object = rdf_list },
+        .{ .subject = rdfs_see_also, .object = rdfs_resource },
+        .{ .subject = try pool.internNamedNode(rdf.rdfs_namespace ++ "isDefinedBy"), .object = rdfs_resource },
+        .{ .subject = try pool.internNamedNode(rdf.rdfs_namespace ++ "comment"), .object = rdfs_resource },
+        .{ .subject = try pool.internNamedNode(rdf.rdfs_namespace ++ "label"), .object = rdfs_resource },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "value"), .object = rdfs_resource },
+    };
+    const range_axioms = [_]struct { subject: rdf.TermId, object: rdf.TermId }{
+        .{ .subject = rdf_type, .object = rdfs_class },
+        .{ .subject = rdfs_domain, .object = rdfs_class },
+        .{ .subject = rdfs_range, .object = rdfs_class },
+        .{ .subject = rdfs_sub_property_of, .object = rdf_property },
+        .{ .subject = rdfs_sub_class_of, .object = rdfs_class },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "subject"), .object = rdfs_resource },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "predicate"), .object = rdfs_resource },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "object"), .object = rdfs_resource },
+        .{ .subject = rdfs_member, .object = rdfs_resource },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "first"), .object = rdfs_resource },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "rest"), .object = rdf_list },
+        .{ .subject = rdfs_see_also, .object = rdfs_resource },
+        .{ .subject = try pool.internNamedNode(rdf.rdfs_namespace ++ "isDefinedBy"), .object = rdfs_resource },
+        .{ .subject = try pool.internNamedNode(rdf.rdfs_namespace ++ "comment"), .object = rdfs_literal },
+        .{ .subject = try pool.internNamedNode(rdf.rdfs_namespace ++ "label"), .object = rdfs_literal },
+        .{ .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "value"), .object = rdfs_resource },
+    };
+    const relation_axioms = [_]rdf.Triple{
+        .{
+            .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "Alt"),
+            .predicate = rdfs_sub_class_of,
+            .object = rdfs_container,
+        },
+        .{
+            .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "Bag"),
+            .predicate = rdfs_sub_class_of,
+            .object = rdfs_container,
+        },
+        .{
+            .subject = try pool.internNamedNode(rdf.rdf_namespace ++ "Seq"),
+            .predicate = rdfs_sub_class_of,
+            .object = rdfs_container,
+        },
+        .{
+            .subject = rdfs_container_membership_property,
+            .predicate = rdfs_sub_class_of,
+            .object = rdf_property,
+        },
+        .{
+            .subject = try pool.internNamedNode(rdf.rdfs_namespace ++ "isDefinedBy"),
+            .predicate = rdfs_sub_property_of,
+            .object = rdfs_see_also,
+        },
+        .{
+            .subject = rdfs_datatype,
+            .predicate = rdfs_sub_class_of,
+            .object = rdfs_class,
+        },
+        .{
+            .subject = try pool.internNamedNode(rdf.rdf_lang_string),
+            .predicate = rdf_type,
+            .object = rdfs_datatype,
+        },
+        .{
+            .subject = try pool.internNamedNode(rdf.xsd_string),
+            .predicate = rdf_type,
+            .object = rdfs_datatype,
+        },
+    };
+
+    var transaction = try materialization.storage.beginTransaction();
+    defer transaction.deinit();
+    var inferred: usize = 0;
+    for (domain_axioms) |axiom| {
+        if (try transaction.add(toQuad(.{
+            .subject = axiom.subject,
+            .predicate = rdfs_domain,
+            .object = axiom.object,
+        }))) inferred += 1;
+    }
+    for (range_axioms) |axiom| {
+        if (try transaction.add(toQuad(.{
+            .subject = axiom.subject,
+            .predicate = rdfs_range,
+            .object = axiom.object,
+        }))) inferred += 1;
+    }
+    for (relation_axioms) |axiom| {
+        if (try transaction.add(toQuad(axiom))) inferred += 1;
+    }
+
+    while (true) {
+        const snapshot = try materialization.allocator.alloc(
+            rdf.Triple,
+            materialization.len(.all),
+        );
+        defer materialization.allocator.free(snapshot);
+        var triples = materialization.iterator(.all);
+        var snapshot_index: usize = 0;
+        while (triples.next()) |triple| : (snapshot_index += 1) {
+            snapshot[snapshot_index] = triple;
+        }
+        std.debug.assert(snapshot_index == snapshot.len);
+
+        var added_this_round: usize = 0;
+        for (snapshot) |triple| {
+            added_this_round += @intFromBool(try addRuleTriple(
+                &transaction,
+                triple.subject,
+                rdf_type,
+                rdfs_resource,
+            )); // rdfs4a
+            if (isRdfSubject(pool, triple.object)) {
+                added_this_round += @intFromBool(try addRuleTriple(
+                    &transaction,
+                    triple.object,
+                    rdf_type,
+                    rdfs_resource,
+                )); // rdfs4b
+            }
+            if (triple.predicate == rdf_type and triple.object == rdf_property) {
+                added_this_round += @intFromBool(try addRuleTriple(
+                    &transaction,
+                    triple.subject,
+                    rdfs_sub_property_of,
+                    triple.subject,
+                )); // rdfs6
+            }
+            if (triple.predicate == rdf_type and triple.object == rdfs_class) {
+                added_this_round += @intFromBool(try addRuleTriple(
+                    &transaction,
+                    triple.subject,
+                    rdfs_sub_class_of,
+                    rdfs_resource,
+                )); // rdfs8
+                added_this_round += @intFromBool(try addRuleTriple(
+                    &transaction,
+                    triple.subject,
+                    rdfs_sub_class_of,
+                    triple.subject,
+                )); // rdfs10
+            }
+            if (triple.predicate == rdf_type and triple.object == rdfs_container_membership_property) {
+                added_this_round += @intFromBool(try addRuleTriple(
+                    &transaction,
+                    triple.subject,
+                    rdfs_sub_property_of,
+                    rdfs_member,
+                )); // rdfs12
+            }
+            if (triple.predicate == rdf_type and triple.object == rdfs_datatype) {
+                added_this_round += @intFromBool(try addRuleTriple(
+                    &transaction,
+                    triple.subject,
+                    rdfs_sub_class_of,
+                    rdfs_literal,
+                )); // rdfs13
+            }
+        }
+
+        for (snapshot) |relation| {
+            for (snapshot) |fact| {
+                if (relation.predicate == rdfs_domain and fact.predicate == relation.subject) {
+                    added_this_round += @intFromBool(try addRuleTriple(
+                        &transaction,
+                        fact.subject,
+                        rdf_type,
+                        relation.object,
+                    )); // rdfs2
+                }
+                if (relation.predicate == rdfs_range and
+                    fact.predicate == relation.subject and
+                    isRdfSubject(pool, fact.object))
+                {
+                    added_this_round += @intFromBool(try addRuleTriple(
+                        &transaction,
+                        fact.object,
+                        rdf_type,
+                        relation.object,
+                    )); // rdfs3
+                }
+                if (relation.predicate == rdfs_sub_property_of and
+                    fact.predicate == rdfs_sub_property_of and
+                    relation.object == fact.subject)
+                {
+                    added_this_round += @intFromBool(try addRuleTriple(
+                        &transaction,
+                        relation.subject,
+                        rdfs_sub_property_of,
+                        fact.object,
+                    )); // rdfs5
+                }
+                if (relation.predicate == rdfs_sub_property_of and
+                    fact.predicate == relation.subject and
+                    isRdfPredicate(pool, relation.object))
+                {
+                    added_this_round += @intFromBool(try addRuleTriple(
+                        &transaction,
+                        fact.subject,
+                        relation.object,
+                        fact.object,
+                    )); // rdfs7
+                }
+                if (relation.predicate == rdfs_sub_class_of and
+                    fact.predicate == rdf_type and
+                    fact.object == relation.subject)
+                {
+                    added_this_round += @intFromBool(try addRuleTriple(
+                        &transaction,
+                        fact.subject,
+                        rdf_type,
+                        relation.object,
+                    )); // rdfs9
+                }
+                if (relation.predicate == rdfs_sub_class_of and
+                    fact.predicate == rdfs_sub_class_of and
+                    relation.object == fact.subject)
+                {
+                    added_this_round += @intFromBool(try addRuleTriple(
+                        &transaction,
+                        relation.subject,
+                        rdfs_sub_class_of,
+                        fact.object,
+                    )); // rdfs11
+                }
+            }
+        }
+        inferred += added_this_round;
+        if (added_this_round == 0) break;
+    }
+
+    try transaction.commit();
+    return .{ .inferred = inferred };
+}
+
+fn addRuleTriple(
+    transaction: *store_mod.Transaction,
+    subject: rdf.TermId,
+    predicate: rdf.TermId,
+    object: rdf.TermId,
+) store_mod.Error!bool {
+    return transaction.add(toQuad(.{
+        .subject = subject,
+        .predicate = predicate,
+        .object = object,
+    }));
+}
+
+fn isRdfSubject(pool: *const rdf.TermPool, term: rdf.TermId) bool {
+    return switch (pool.view(term) orelse return false) {
+        .named_node, .blank_node => true,
+        .literal => false,
+    };
+}
+
+fn isRdfPredicate(pool: *const rdf.TermPool, term: rdf.TermId) bool {
+    return switch (pool.view(term) orelse return false) {
+        .named_node => true,
+        .blank_node, .literal => false,
+    };
+}
+
 fn collectMembershipTerm(
     destination: *rdf.TermPool,
     source: *const rdf.TermPool,
@@ -566,6 +863,63 @@ test "RDFS container materialization includes membership IRIs named only by targ
     }));
 }
 
+test "RDFS core materialization reaches a rule fixed point" {
+    var materialization = Materialization.init(std.testing.allocator);
+    defer materialization.deinit();
+    const pool = materialization.termPool();
+
+    const rdf_type = try pool.internNamedNode(rdf.rdf_namespace ++ "type");
+    const rdfs_domain = try pool.internNamedNode(rdf.rdfs_namespace ++ "domain");
+    const rdfs_range = try pool.internNamedNode(rdf.rdfs_namespace ++ "range");
+    const rdfs_sub_class_of = try pool.internNamedNode(rdf.rdfs_namespace ++ "subClassOf");
+    const rdfs_sub_property_of = try pool.internNamedNode(rdf.rdfs_namespace ++ "subPropertyOf");
+    const rdfs_resource = try pool.internNamedNode(rdf.rdfs_namespace ++ "Resource");
+    const rdfs_literal = try pool.internNamedNode(rdf.rdfs_namespace ++ "Literal");
+    const rdfs_datatype = try pool.internNamedNode(rdf.rdfs_namespace ++ "Datatype");
+    const rdfs_container_membership_property = try pool.internNamedNode(
+        rdf.rdfs_namespace ++ "ContainerMembershipProperty",
+    );
+    const rdfs_member = try pool.internNamedNode(rdf.rdfs_namespace ++ "member");
+    const subject = try pool.internNamedNode("https://example.com/subject");
+    const object = try pool.internNamedNode("https://example.com/object");
+    const child_property = try pool.internNamedNode("https://example.com/child-property");
+    const parent_property = try pool.internNamedNode("https://example.com/parent-property");
+    const child_class = try pool.internNamedNode("https://example.com/Child");
+    const parent_class = try pool.internNamedNode("https://example.com/Parent");
+    const membership_property = try pool.internNamedNode("https://example.com/membership");
+    const datatype = try pool.internNamedNode("https://example.com/datatype");
+
+    const assertions = [_]rdf.Triple{
+        .{ .subject = child_property, .predicate = rdfs_sub_property_of, .object = parent_property },
+        .{ .subject = parent_property, .predicate = rdfs_domain, .object = child_class },
+        .{ .subject = parent_property, .predicate = rdfs_range, .object = parent_class },
+        .{ .subject = child_class, .predicate = rdfs_sub_class_of, .object = parent_class },
+        .{ .subject = subject, .predicate = child_property, .object = object },
+        .{ .subject = membership_property, .predicate = rdf_type, .object = rdfs_container_membership_property },
+        .{ .subject = datatype, .predicate = rdf_type, .object = rdfs_datatype },
+    };
+    for (assertions) |assertion| _ = try materialization.addAsserted(assertion);
+
+    _ = try materializeRdfCore(&materialization);
+    const result = try materializeRdfsCore(&materialization);
+    try std.testing.expect(result.inferred > 0);
+    const consequences = [_]rdf.Triple{
+        .{ .subject = subject, .predicate = parent_property, .object = object }, // rdfs7
+        .{ .subject = subject, .predicate = rdf_type, .object = child_class }, // rdfs2
+        .{ .subject = subject, .predicate = rdf_type, .object = parent_class }, // rdfs9
+        .{ .subject = object, .predicate = rdf_type, .object = parent_class }, // rdfs3
+        .{ .subject = child_property, .predicate = rdfs_sub_property_of, .object = child_property }, // rdfs6
+        .{ .subject = child_class, .predicate = rdfs_sub_class_of, .object = child_class }, // rdfs10
+        .{ .subject = child_class, .predicate = rdfs_sub_class_of, .object = rdfs_resource }, // rdfs8/11
+        .{ .subject = membership_property, .predicate = rdfs_sub_property_of, .object = rdfs_member }, // rdfs12
+        .{ .subject = datatype, .predicate = rdfs_sub_class_of, .object = rdfs_literal }, // rdfs13
+    };
+    for (consequences) |consequence| try std.testing.expect(materialization.contains(consequence));
+
+    const repeated = try materializeRdfsCore(&materialization);
+    try std.testing.expectEqual(@as(usize, 0), repeated.inferred);
+}
+
 fn exerciseMaterializationAllocations(allocator: std.mem.Allocator) !void {
     var graph = rdf.Graph.init(allocator);
     defer graph.deinit();
@@ -584,6 +938,20 @@ test "graph materialization handles every allocation failure without leaks" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         exerciseMaterializationAllocations,
+        .{},
+    );
+}
+
+fn exerciseRdfsCoreAllocations(allocator: std.mem.Allocator) !void {
+    var materialization = Materialization.init(allocator);
+    defer materialization.deinit();
+    _ = try materializeRdfsCore(&materialization);
+}
+
+test "RDFS core handles every allocation failure without leaks" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseRdfsCoreAllocations,
         .{},
     );
 }

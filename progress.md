@@ -153,9 +153,11 @@ separate packages only after their APIs and release cycles become independently 
   existential blank-node matching and an exact expected-failure baseline.
 - Target-aware `rdf:_n` axioms plus the directly corresponding `rdfs12` and `rdfs7`
   consequences implement RDFS container-membership semantics.
-- The current semantic baseline passes 32 cases and tracks 19 failures covering the
-  unimplemented datatype, inconsistency, and general RDFS behavior.
-- The local suite has 74 tests; all 827 integrated syntax/evaluation cases still pass.
+- The finite non-container RDFS axioms and all `rdfs1`–`rdfs13` rule patterns now run to
+  a transactional fixed point for ordinary RDF triples.
+- The current semantic baseline passes 33 cases and tracks 18 failures covering the
+  unimplemented datatype interpretation and inconsistency behavior.
+- The local suite has 76 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -165,18 +167,18 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 4 — Turtle and TriG: complete.
 - Milestone 5 — indexed in-memory quad store: complete.
 - Milestone 6 — RDF/RDFS semantics and entailment: in progress; the materialization
-  boundary, RDF core, and container-membership layer are implemented; datatype and
-  general RDFS rules remain.
+  boundary, RDF core, container membership, and general RDFS rules are implemented;
+  datatype semantics and consistency checking remain.
 - Milestones 7–14: not started.
 
 ## Next actions
 
-1. Add the finite non-container RDFS axiomatic triples and general `rdfs1`–`rdfs13`
-   fixed-point rules.
-2. Implement datatype interpretation, lexical validation, value equality, and
-   inconsistency detection incrementally against the exact failing cases.
-3. Audit complete RDF/RDFS closure behavior and remove every newly passing case from the
-   executable baseline.
+1. Implement datatype lexical validation and inconsistency detection for the mandatory
+   `xsd:string` and `rdf:langString` datatypes.
+2. Add value equality and recognized XSD datatype interpretation incrementally against
+   the exact failing cases.
+3. Add generalized RDF intermediate support where required for complete closure, then
+   audit RDF/RDFS conformance and remove every newly passing baseline case.
 
 ## Session log
 
@@ -559,3 +561,18 @@ separate packages only after their APIs and release cycles become independently 
   exhaustive allocation-failure coverage.
 - Removed all three container cases from the expected-failure baseline, raising the
   official model-theory result from 29/51 to 32/51 while passing all 74 local tests.
+
+### 2026-10-24 — General RDFS fixed-point rules
+
+- Added the 38 finite non-container RDFS axiomatic triples and mandatory datatype-class
+  facts for `rdf:langString` and `xsd:string`.
+- Implemented all `rdfs1`–`rdfs13` patterns over ordinary RDF triples, including domain,
+  range, subproperty, subclass, reflexive, transitive, and type propagation.
+- Evaluated rules against stable snapshots to a fixed point inside one transaction,
+  preserving atomic and idempotent materialization.
+- Explicitly excluded generalized intermediate triples whose subjects or predicates are
+  invalid in the current RDF graph representation.
+- Added focused multi-round rule coverage and isolated exhaustive allocation-failure
+  testing.
+- Removed the subproperty semantics case from the expected-failure baseline, raising
+  the official model-theory result from 32/51 to 33/51 with 76 local tests passing.
