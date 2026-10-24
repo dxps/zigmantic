@@ -139,7 +139,9 @@ separate packages only after their APIs and release cycles become independently 
   defines order-preserving graph/dataset removal.
 - The public `store` module provides an indexed in-memory RDF dataset with exact-quad
   set semantics and subject, predicate, object, and graph posting indexes.
-- The local suite has 59 tests; all 827 integrated official RDF cases pass.
+- Store transactions provide enforced single-writer commit, explicit or automatic
+  rollback, eager read visibility, and allocation-free undo.
+- The local suite has 63 tests; all 827 integrated official RDF cases pass.
 
 ## Milestone status
 
@@ -147,15 +149,15 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 2 — RDF 1.1 data model: complete.
 - Milestone 3 — N-Triples and N-Quads: complete.
 - Milestone 4 — Turtle and TriG: complete.
-- Milestone 5 — indexed in-memory quad store: in progress; indexed deterministic
-  iteration is implemented, while transactions remain.
+- Milestone 5 — indexed in-memory quad store: in progress; indexing and transactions
+  are implemented, while explicit compaction and the final API audit remain.
 - Milestones 6–14: not started.
 
 ## Next actions
 
-1. Add transaction boundaries and rollback coverage to the indexed store.
-2. Add explicit index compaction and stale-slot reclamation.
-3. Complete the store complexity and mutation-guarantee audit.
+1. Add explicit index compaction and stale-slot reclamation.
+2. Complete the store complexity and mutation-guarantee audit.
+3. Begin RDF and RDFS entailment after the store milestone closes.
 
 ## Session log
 
@@ -457,3 +459,18 @@ separate packages only after their APIs and release cycles become independently 
 - Reused the RDF model's public position validators and pattern matching semantics.
 - Added indexed-query, validation, removal/reinsertion, and exhaustive allocation-failure
   coverage while retaining all 827 official RDF conformance cases.
+
+### 2026-10-24 — Store transactions
+
+- Added one enforced active transaction per store with direct-mutation and nesting
+  rejection.
+- Added eager transactional insertion and removal so ordinary reads observe tentative
+  state until commit or rollback.
+- Added reverse undo logging that restores removed quads in their original slots and
+  rolls back additions without allocation.
+- Added explicit commit and rollback plus automatic rollback when an active transaction
+  is deinitialized.
+- Kept duplicate insertion and absent removal allocation-free inside transactions.
+- Added commit, rollback ordering, mutation exclusion, automatic rollback, closed-state,
+  and exhaustive allocation-failure coverage.
+- Passed all 63 local tests and retained all 827 official RDF conformance cases.

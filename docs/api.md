@@ -124,6 +124,13 @@ Removal uses tombstones so existing slot and posting-list positions remain stabl
 removed quad is absent from queries immediately; reinserting it places it at the end of
 the current live iteration order. Any mutation invalidates outstanding store iterators.
 
+`beginTransaction` creates the store's sole active transaction. Transaction changes are
+visible immediately to reads, while direct store mutations and nested transactions are
+rejected until the transaction closes. `commit` keeps the changes; `rollback` applies
+its undo log in reverse without allocating. Deinitializing an active transaction rolls
+it back automatically. The transaction must be deinitialized before its store, and a
+closed transaction rejects further operations.
+
 ## IRI references
 
 `iri.resolveAlloc(allocator, base, reference)` returns an owned absolute IRI using the

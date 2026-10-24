@@ -23,6 +23,11 @@ const PostingMutation = struct {
     created: bool,
 };
 
+pub const Error = rdf.Error || error{
+    TransactionActive,
+    TransactionClosed,
+};
+
 pub const Store = struct {
     allocator: std.mem.Allocator,
     terms: rdf.TermPool,
@@ -33,6 +38,7 @@ pub const Store = struct {
     object_index: TermIndex = .empty,
     graph_index: GraphIndex = .empty,
     live_count: usize = 0,
+    transaction_active: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -42,6 +48,7 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Store) void {
+        std.debug.assert(!self.transaction_active);
         deinitIndex(rdf.TermId, &self.subject_index, self.allocator);
         deinitIndex(rdf.TermId, &self.predicate_index, self.allocator);
         deinitIndex(rdf.TermId, &self.object_index, self.allocator);
@@ -54,7 +61,12 @@ pub const Store = struct {
 
     /// Inserts a pool-local quad. Returns false when the exact quad already exists.
     /// Allocation failure leaves the store's logical contents unchanged.
-    pub fn add(self: *Store, quad: rdf.Quad) rdf.Error!bool {
+    pub fn add(self: *Store, quad: rdf.Quad) Error!bool {
+        if (self.transaction_active) return error.TransactionActive;
+        return self.addInternal(quad);
+    }
+
+    fn addInternal(self: *Store, quad: rdf.Quad) rdf.Error!bool {
         try rdf.validateTriple(&self.terms, .{
             .subject = quad.subject,
             .predicate = quad.predicate,
@@ -137,13 +149,18 @@ pub const Store = struct {
 
     /// Removes an exact quad. Slots and posting-list positions remain stable so existing
     /// insertion order is preserved; iterators must not span mutations.
-    pub fn remove(self: *Store, quad: rdf.Quad) bool {
+    pub fn remove(self: *Store, quad: rdf.Quad) Error!bool {
+        if (self.transaction_active) return error.TransactionActive;
+        return self.removeInternal(quad) != null;
+    }
+
+    fn removeInternal(self: *Store, quad: rdf.Quad) ?usize {
         const key = quadKey(quad);
-        const slot_index = self.active_quads.get(key) orelse return false;
+        const slot_index = self.active_quads.get(key) orelse return null;
         _ = self.active_quads.remove(key);
         self.slots.items[slot_index].active = false;
         self.live_count -= 1;
-        return true;
+        return slot_index;
     }
 
     pub fn contains(self: *const Store, quad: rdf.Quad) bool {
@@ -152,6 +169,14 @@ pub const Store = struct {
 
     pub fn len(self: *const Store) usize {
         return self.live_count;
+    }
+
+    /// Begins the store's only active transaction. Tentative changes are visible to
+    /// reads through the store and transaction until commit or rollback.
+    pub fn beginTransaction(self: *Store) Error!Transaction {
+        if (self.transaction_active) return error.TransactionActive;
+        self.transaction_active = true;
+        return .{ .store = self };
     }
 
     /// Returns an allocation-free iterator. When fields are bound, the shortest
@@ -163,6 +188,89 @@ pub const Store = struct {
         if (pattern.object) |value| chooseCandidates(&candidates, self.object_index.get(value));
         if (pattern.graph_name) |value| chooseCandidates(&candidates, self.graph_index.get(graphKey(value)));
         return .{ .store = self, .pattern = pattern, .candidates = candidates };
+    }
+};
+
+const Undo = union(enum) {
+    added: rdf.Quad,
+    removed: struct {
+        quad: rdf.Quad,
+        slot_index: usize,
+    },
+};
+
+pub const Transaction = struct {
+    store: *Store,
+    undo: std.ArrayList(Undo) = .empty,
+    active: bool = true,
+
+    /// Rolls back automatically when an active transaction leaves scope.
+    pub fn deinit(self: *Transaction) void {
+        if (self.active) self.rollbackInternal();
+        self.undo.deinit(self.store.allocator);
+        self.* = undefined;
+    }
+
+    pub fn add(self: *Transaction, quad: rdf.Quad) Error!bool {
+        if (!self.active) return error.TransactionClosed;
+        try rdf.validateTriple(&self.store.terms, .{
+            .subject = quad.subject,
+            .predicate = quad.predicate,
+            .object = quad.object,
+        });
+        try rdf.validateGraphName(&self.store.terms, quad.graph_name);
+        if (self.store.contains(quad)) return false;
+        try self.undo.ensureUnusedCapacity(self.store.allocator, 1);
+        const inserted = try self.store.addInternal(quad);
+        std.debug.assert(inserted);
+        self.undo.appendAssumeCapacity(.{ .added = quad });
+        return true;
+    }
+
+    pub fn remove(self: *Transaction, quad: rdf.Quad) Error!bool {
+        if (!self.active) return error.TransactionClosed;
+        if (!self.store.contains(quad)) return false;
+        try self.undo.ensureUnusedCapacity(self.store.allocator, 1);
+        const slot_index = self.store.removeInternal(quad).?;
+        self.undo.appendAssumeCapacity(.{ .removed = .{
+            .quad = quad,
+            .slot_index = slot_index,
+        } });
+        return true;
+    }
+
+    pub fn commit(self: *Transaction) Error!void {
+        if (!self.active) return error.TransactionClosed;
+        self.undo.clearRetainingCapacity();
+        self.close();
+    }
+
+    pub fn rollback(self: *Transaction) Error!void {
+        if (!self.active) return error.TransactionClosed;
+        self.rollbackInternal();
+    }
+
+    fn rollbackInternal(self: *Transaction) void {
+        var index = self.undo.items.len;
+        while (index > 0) {
+            index -= 1;
+            switch (self.undo.items[index]) {
+                .added => |quad| _ = self.store.removeInternal(quad),
+                .removed => |entry| {
+                    const key = quadKey(entry.quad);
+                    self.store.active_quads.putAssumeCapacity(key, entry.slot_index);
+                    self.store.slots.items[entry.slot_index].active = true;
+                    self.store.live_count += 1;
+                },
+            }
+        }
+        self.undo.clearRetainingCapacity();
+        self.close();
+    }
+
+    fn close(self: *Transaction) void {
+        self.active = false;
+        self.store.transaction_active = false;
     }
 };
 
@@ -305,8 +413,8 @@ test "store removal and reinsertion retain deterministic live order" {
     _ = try store.add(first);
     _ = try store.add(second);
 
-    try std.testing.expect(store.remove(first));
-    try std.testing.expect(!store.remove(first));
+    try std.testing.expect(try store.remove(first));
+    try std.testing.expect(!(try store.remove(first)));
     try std.testing.expect(!store.contains(first));
     try std.testing.expectEqual(@as(usize, 1), store.len());
     try std.testing.expect(try store.add(first));
@@ -315,6 +423,82 @@ test "store removal and reinsertion retain deterministic live order" {
     try std.testing.expectEqual(second, all.next().?);
     try std.testing.expectEqual(first, all.next().?);
     try std.testing.expectEqual(@as(?rdf.Quad, null), all.next());
+}
+
+test "store transaction commit is atomic and excludes direct mutation" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const subject = try store.terms.internNamedNode("https://example.com/subject");
+    const predicate = try store.terms.internNamedNode("https://example.com/predicate");
+    const first_object = try store.terms.internSimpleLiteral("first");
+    const second_object = try store.terms.internSimpleLiteral("second");
+    const first = rdf.Quad{ .subject = subject, .predicate = predicate, .object = first_object };
+    const second = rdf.Quad{ .subject = subject, .predicate = predicate, .object = second_object };
+    _ = try store.add(first);
+
+    var transaction = try store.beginTransaction();
+    defer transaction.deinit();
+    try std.testing.expectError(error.TransactionActive, store.beginTransaction());
+    try std.testing.expectError(error.TransactionActive, store.add(second));
+    try std.testing.expectError(error.TransactionActive, store.remove(first));
+    try std.testing.expect(try transaction.remove(first));
+    try std.testing.expect(try transaction.add(second));
+    try std.testing.expect(!store.contains(first));
+    try std.testing.expect(store.contains(second));
+    try transaction.commit();
+
+    try std.testing.expectError(error.TransactionClosed, transaction.add(first));
+    try std.testing.expect(!store.contains(first));
+    try std.testing.expect(store.contains(second));
+    try std.testing.expectEqual(@as(usize, 1), store.len());
+}
+
+test "store transaction rollback restores contents and order without allocating" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const subject = try store.terms.internNamedNode("https://example.com/subject");
+    const predicate = try store.terms.internNamedNode("https://example.com/predicate");
+    const first_object = try store.terms.internSimpleLiteral("first");
+    const second_object = try store.terms.internSimpleLiteral("second");
+    const temporary_object = try store.terms.internSimpleLiteral("temporary");
+    const first = rdf.Quad{ .subject = subject, .predicate = predicate, .object = first_object };
+    const second = rdf.Quad{ .subject = subject, .predicate = predicate, .object = second_object };
+    const temporary = rdf.Quad{ .subject = subject, .predicate = predicate, .object = temporary_object };
+    _ = try store.add(first);
+    _ = try store.add(second);
+
+    var transaction = try store.beginTransaction();
+    defer transaction.deinit();
+    try std.testing.expect(try transaction.remove(first));
+    try std.testing.expect(try transaction.add(temporary));
+    try transaction.rollback();
+
+    try std.testing.expect(store.contains(first));
+    try std.testing.expect(store.contains(second));
+    try std.testing.expect(!store.contains(temporary));
+    var all = store.iterator(.{});
+    try std.testing.expectEqual(first, all.next().?);
+    try std.testing.expectEqual(second, all.next().?);
+    try std.testing.expectEqual(@as(?rdf.Quad, null), all.next());
+}
+
+test "active store transaction rolls back when deinitialized" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const subject = try store.terms.internNamedNode("https://example.com/subject");
+    const predicate = try store.terms.internNamedNode("https://example.com/predicate");
+    const object = try store.terms.internSimpleLiteral("object");
+    const quad = rdf.Quad{ .subject = subject, .predicate = predicate, .object = object };
+    {
+        var transaction = try store.beginTransaction();
+        defer transaction.deinit();
+        try std.testing.expect(try transaction.add(quad));
+    }
+    try std.testing.expect(!store.contains(quad));
+    try std.testing.expectEqual(@as(usize, 0), store.len());
 }
 
 fn exerciseStoreAllocations(allocator: std.mem.Allocator) !void {
@@ -337,6 +521,28 @@ test "store insertion handles every allocation failure without partial indexes" 
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         exerciseStoreAllocations,
+        .{},
+    );
+}
+
+fn exerciseTransactionAllocations(allocator: std.mem.Allocator) !void {
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    const subject = try store.terms.internNamedNode("https://example.com/subject");
+    const predicate = try store.terms.internNamedNode("https://example.com/predicate");
+    const object = try store.terms.internSimpleLiteral("object");
+    const quad = rdf.Quad{ .subject = subject, .predicate = predicate, .object = object };
+    var transaction = try store.beginTransaction();
+    defer transaction.deinit();
+    _ = try transaction.add(quad);
+    try transaction.commit();
+}
+
+test "store transaction handles every allocation failure atomically" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseTransactionAllocations,
         .{},
     );
 }

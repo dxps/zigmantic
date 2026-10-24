@@ -117,3 +117,10 @@ changes the relative order of live quads.
 Insertion updates every index transactionally at the operation level. Allocation
 failure unwinds all posting-list and slot changes before returning, leaving no partially
 indexed live quad.
+
+Only one explicit transaction may be active on a store. Its eager mutations make the
+transaction's tentative state available to ordinary reads, while direct mutations are
+blocked. An insertion or removal is appended to the undo log only after reserving log
+capacity. Rollback walks that log backward: additions become tombstones, while removals
+reactivate their original slots and exact-quad entries using already-reserved hash-map
+capacity. Consequently rollback itself does not allocate and restores original order.
