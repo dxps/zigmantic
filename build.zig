@@ -33,8 +33,19 @@ pub fn build(b: *std.Build) void {
     });
     const run_nquads_conformance_tests = b.addRunArtifact(nquads_conformance_tests);
 
+    const turtle_conformance_module = b.createModule(.{
+        .root_source_file = b.path("tests/turtle_conformance.zig"),
+        .target = target,
+    });
+    turtle_conformance_module.addImport("zigmantic", zigmantic);
+    const turtle_conformance_tests = b.addTest(.{
+        .root_module = turtle_conformance_module,
+    });
+    const run_turtle_conformance_tests = b.addRunArtifact(turtle_conformance_tests);
+
     const test_step = b.step("test", "Run all Zigmantic tests");
     test_step.dependOn(&run_library_tests.step);
     test_step.dependOn(&run_ntriples_conformance_tests.step);
     test_step.dependOn(&run_nquads_conformance_tests.step);
+    test_step.dependOn(&run_turtle_conformance_tests.step);
 }

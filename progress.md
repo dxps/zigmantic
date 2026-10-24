@@ -115,6 +115,12 @@ separate packages only after their APIs and release cycles become independently 
   including empty collections and nested collection/property-list items.
 - The local suite has 40 tests; all 157 official N-Triples and N-Quads syntax cases
   continue to pass. Turtle conformance is not yet claimed.
+- The official RDF 1.1 Turtle manifest and its action/result files are vendored at the
+  same pinned W3C revision as the line-syntax suites.
+- The manifest runner executes all 313 Turtle syntax and evaluation entries. Evaluation
+  uses RDF graph isomorphism so blank-node labels need not match.
+- The current Turtle baseline passes 295 cases and tracks 18 exact known failures; no
+  Turtle conformance claim is made while that list is non-empty.
 
 ## Milestone status
 
@@ -127,10 +133,10 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Pin the official Turtle suite and add a manifest-driven conformance runner.
-2. Use its failures to complete prefixed-name, Unicode name, and remaining grammar
-   edge-case coverage.
-3. Reach full Turtle syntax/evaluation conformance before adding serialization and TriG
+1. Resolve the 18 explicit Turtle failures, beginning with prefixed-name and Unicode
+   name grammar.
+2. Correct the remaining blank-node structure and negative syntax cases.
+3. Reach all 313 Turtle cases before adding serialization and TriG
    graph syntax.
 
 ## Session log
@@ -300,3 +306,15 @@ separate packages only after their APIs and release cycles become independently 
 - Added exact chain-identity, empty-list, nested-structure, malformed-input, and
   allocation-failure coverage.
 - Passed all 40 local tests and retained all 157 official N-Triples/N-Quads cases.
+
+### 2026-10-24 — Turtle conformance harness
+
+- Pinned and vendored the official RDF 1.1 Turtle manifest, action inputs, expected
+  N-Triples graphs, provenance, and test-suite license at the existing W3C revision.
+- Added a manifest-list reader that executes all 313 listed cases rather than scanning
+  or silently omitting test definitions.
+- Distinguished positive syntax, negative syntax, and evaluation cases.
+- Added blank-node-insensitive graph isomorphism for evaluation results.
+- Established an executable baseline of 295 passing cases and 18 exact known failures;
+  regressions and newly passing cases both require deliberate baseline updates.
+- Retained all 40 local tests and all 157 N-Triples/N-Quads cases.
