@@ -14,7 +14,9 @@ equality. Lexical forms are not value-normalized: for example, distinct lexical 
 the same numeric value remain distinct RDF terms.
 
 `TermPool.view` returns borrowed slices. They remain valid until the owning pool is
-deinitialized. Public APIs do not transfer ownership implicitly.
+deinitialized. `TermPool.internView` is the public bridge from a borrowed RDF value into
+owned pool storage. Internal string identifiers and term records are deliberately not
+part of the public API.
 
 `TermId` equality is meaningful only within one pool. `TermPool.eqlTerm` and
 `TermPool.hashTerm` operate on RDF term values and therefore provide the explicit path
@@ -38,7 +40,12 @@ changing RDF term ownership or equality.
 
 Graphs and datasets provide allocation-free pattern iterators. A null pattern field is
 a wildcard; a non-null field requires exact pool-local identifier equality. Dataset
-graph patterns distinguish the default graph from a named graph.
+graph patterns distinguish the default graph from a named graph. Mutation invalidates
+outstanding item slices and iterators. Removal preserves the relative order of all
+remaining statements.
+
+The shared `validateTriple` and `validateGraphName` functions are public so the indexed
+store can enforce exactly the same RDF position rules without duplicating them.
 
 ## Validation boundaries
 

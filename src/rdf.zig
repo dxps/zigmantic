@@ -12,13 +12,14 @@ pub const rdf_lang_string = rdf_namespace ++ "langString";
 pub const xsd_namespace = "http://www.w3.org/2001/XMLSchema#";
 pub const xsd_string = xsd_namespace ++ "string";
 
-pub const StringId = enum(u32) { _ };
+const StringId = enum(u32) { _ };
 pub const TermId = enum(u32) { _ };
 
 pub const Error = std.mem.Allocator.Error || error{
     InvalidBlankNodeIdentifier,
     InvalidGraphName,
     InvalidIri,
+    InvalidLiteral,
     InvalidLanguageTag,
     InvalidPredicate,
     InvalidSubject,
@@ -26,13 +27,13 @@ pub const Error = std.mem.Allocator.Error || error{
     UnknownTerm,
 };
 
-pub const Literal = struct {
+const Literal = struct {
     lexical_form: StringId,
     datatype: StringId,
     language: ?StringId = null,
 };
 
-pub const Term = union(enum) {
+const Term = union(enum) {
     named_node: StringId,
     blank_node: StringId,
     literal: Literal,
@@ -119,7 +120,23 @@ pub const TermPool = struct {
         } });
     }
 
-    pub fn get(self: *const TermPool, id: TermId) ?Term {
+    /// Interns a borrowed RDF term value without exposing the pool's storage format.
+    /// A language-tagged value must use the required `rdf:langString` datatype.
+    pub fn internView(self: *TermPool, value: TermView) Error!TermId {
+        return switch (value) {
+            .named_node => |iri| self.internNamedNode(iri),
+            .blank_node => |identifier| self.internBlankNode(identifier),
+            .literal => |literal| if (literal.language) |language|
+                if (std.mem.eql(u8, literal.datatype, rdf_lang_string))
+                    self.internLanguageLiteral(literal.lexical_form, language)
+                else
+                    error.InvalidLiteral
+            else
+                self.internTypedLiteral(literal.lexical_form, literal.datatype),
+        };
+    }
+
+    fn get(self: *const TermPool, id: TermId) ?Term {
         const index: usize = @backingInt(id);
         if (index >= self.terms.items.len) return null;
         return self.terms.items[index];
@@ -330,6 +347,18 @@ pub const Graph = struct {
         return true;
     }
 
+    /// Removes an exact pool-local triple while preserving the order of the remaining
+    /// triples. Returns false when the triple is absent.
+    pub fn remove(self: *Graph, triple: Triple) bool {
+        for (self.triples.items, 0..) |existing, index| {
+            if (std.meta.eql(existing, triple)) {
+                _ = self.triples.orderedRemove(index);
+                return true;
+            }
+        }
+        return false;
+    }
+
     pub fn contains(self: *const Graph, triple: Triple) bool {
         for (self.triples.items) |existing| {
             if (std.meta.eql(existing, triple)) return true;
@@ -381,6 +410,18 @@ pub const Dataset = struct {
         }
         try self.quads.append(self.allocator, quad);
         return true;
+    }
+
+    /// Removes an exact pool-local quad while preserving the order of the remaining
+    /// quads. Returns false when the quad is absent.
+    pub fn remove(self: *Dataset, quad: Quad) bool {
+        for (self.quads.items, 0..) |existing, index| {
+            if (std.meta.eql(existing, quad)) {
+                _ = self.quads.orderedRemove(index);
+                return true;
+            }
+        }
+        return false;
     }
 
     pub fn addDefault(self: *Dataset, triple: Triple) Error!bool {
@@ -438,7 +479,9 @@ fn literalViewEql(left: LiteralView, right: LiteralView) bool {
     return std.mem.eql(u8, left.language.?, right.language.?);
 }
 
-fn validateTriple(pool: *const TermPool, triple: Triple) Error!void {
+/// Validates that all identifiers belong to `pool` and occupy legal RDF triple
+/// positions. This does not insert the triple into a container.
+pub fn validateTriple(pool: *const TermPool, triple: Triple) Error!void {
     const subject = pool.get(triple.subject) orelse return error.UnknownTerm;
     const predicate = pool.get(triple.predicate) orelse return error.UnknownTerm;
     _ = pool.get(triple.object) orelse return error.UnknownTerm;
@@ -450,7 +493,8 @@ fn validateTriple(pool: *const TermPool, triple: Triple) Error!void {
     if (predicate != .named_node) return error.InvalidPredicate;
 }
 
-fn validateGraphName(pool: *const TermPool, graph_name: GraphName) Error!void {
+/// Validates that a graph name is the default graph or a pool-owned IRI or blank node.
+pub fn validateGraphName(pool: *const TermPool, graph_name: GraphName) Error!void {
     switch (graph_name) {
         .default => {},
         .named => |id| switch (pool.get(id) orelse return error.UnknownTerm) {
@@ -540,6 +584,23 @@ test "simple and language literals have their RDF 1.1 datatypes" {
     const language_view = pool.view(language).?.literal;
     try std.testing.expectEqualStrings(rdf_lang_string, language_view.datatype);
     try std.testing.expectEqualStrings("ro-latn", language_view.language.?);
+}
+
+test "term views can be safely interned without exposing storage identifiers" {
+    var source = TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    var target = TermPool.init(std.testing.allocator);
+    defer target.deinit();
+
+    const source_literal = try source.internLanguageLiteral("salut", "RO-Latn");
+    const copied = try target.internView(source.view(source_literal).?);
+    try std.testing.expect(try source.eqlTerm(source_literal, &target, copied));
+
+    try std.testing.expectError(error.InvalidLiteral, target.internView(.{ .literal = .{
+        .lexical_form = "invalid",
+        .datatype = xsd_string,
+        .language = "en",
+    } }));
 }
 
 test "term equality and hashing are stable across pools" {
@@ -649,6 +710,25 @@ test "graph iterator filters without allocating" {
     try std.testing.expectEqual(@as(?Triple, null), matches.next());
 }
 
+test "graph removal preserves remaining statement order" {
+    var graph = Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    const subject = try graph.terms.internNamedNode("https://example.com/subject");
+    const predicate = try graph.terms.internNamedNode("https://example.com/predicate");
+    const first = try graph.terms.internSimpleLiteral("first");
+    const second = try graph.terms.internSimpleLiteral("second");
+    const first_triple = Triple{ .subject = subject, .predicate = predicate, .object = first };
+    const second_triple = Triple{ .subject = subject, .predicate = predicate, .object = second };
+    _ = try graph.add(first_triple);
+    _ = try graph.add(second_triple);
+
+    try std.testing.expect(graph.remove(first_triple));
+    try std.testing.expect(!graph.remove(first_triple));
+    try std.testing.expectEqual(@as(usize, 1), graph.len());
+    try std.testing.expectEqual(second_triple, graph.items()[0]);
+}
+
 test "dataset supports default, IRI-named, and blank-node-named graphs" {
     var dataset = Dataset.init(std.testing.allocator);
     defer dataset.deinit();
@@ -708,6 +788,30 @@ test "dataset iterator distinguishes default and named graphs" {
     var named_matches = dataset.iterator(.{ .graph_name = .{ .named = graph_name } });
     try std.testing.expectEqual(GraphName{ .named = graph_name }, named_matches.next().?.graph_name);
     try std.testing.expectEqual(@as(?Quad, null), named_matches.next());
+}
+
+test "dataset removal preserves remaining quad order" {
+    var dataset = Dataset.init(std.testing.allocator);
+    defer dataset.deinit();
+
+    const subject = try dataset.terms.internNamedNode("https://example.com/subject");
+    const predicate = try dataset.terms.internNamedNode("https://example.com/predicate");
+    const object = try dataset.terms.internNamedNode("https://example.com/object");
+    const graph_name = try dataset.terms.internNamedNode("https://example.com/graph");
+    const default_quad = Quad{ .subject = subject, .predicate = predicate, .object = object };
+    const named_quad = Quad{
+        .subject = subject,
+        .predicate = predicate,
+        .object = object,
+        .graph_name = .{ .named = graph_name },
+    };
+    _ = try dataset.add(default_quad);
+    _ = try dataset.add(named_quad);
+
+    try std.testing.expect(dataset.remove(default_quad));
+    try std.testing.expect(!dataset.remove(default_quad));
+    try std.testing.expectEqual(@as(usize, 1), dataset.len());
+    try std.testing.expectEqual(named_quad, dataset.items()[0]);
 }
 
 fn exerciseGraphAllocations(allocator: std.mem.Allocator) !void {

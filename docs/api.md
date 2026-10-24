@@ -12,8 +12,30 @@
   slices that the caller frees with the allocator passed to the function.
 - `rdf_io.serializeTurtleAlloc` and `rdf_io.serializeTriGAlloc` likewise return
   allocator-owned byte slices.
-- Term views and statement slices are borrowed and remain valid only while their owner
-  remains alive and structurally unchanged.
+- Term views are borrowed and remain valid until their pool is deinitialized. Statement
+  slices remain valid only while their container remains structurally unchanged.
+
+Owned RDF containers and term pools must not be copied by value after initialization;
+move them or pass pointers instead. Copying an owner would duplicate allocation handles
+and make `deinit` unsafe.
+
+## RDF data model
+
+`TermId` is a compact handle meaningful only in its owning `TermPool`. Construct terms
+through the named-node, blank-node, and literal interning functions. `view` exposes a
+borrowed `TermView`; `internView` is the supported way to intern such a value into a
+pool without depending on internal string or term identifiers. When transferring blank
+nodes between independent RDF scopes, callers must still choose an explicit relabeling
+policy rather than assuming labels establish cross-scope identity.
+
+`validateTriple` and `validateGraphName` expose the common RDF-position checks for
+higher-level containers such as stores. `Graph.add` and `Dataset.add` apply those checks
+and set semantics. Their `remove` operations delete exact pool-local statements and
+preserve the relative order of remaining statements.
+
+`items` and pattern iterators borrow container storage. Any structural mutation can
+invalidate a statement slice or iterator, so callers must reacquire them after mutation.
+Term views point into stable pool-owned string storage and remain valid until `deinit`.
 
 ## RDF line syntaxes
 

@@ -134,21 +134,24 @@ separate packages only after their APIs and release cycles become independently 
   now pass with no exclusions.
 - Deterministic expanded TriG serialization emits default triples directly and one
   explicit `GRAPH` block per named-graph quad while preserving dataset iteration order.
-- The local suite has 53 tests; all 827 integrated official RDF cases pass.
+- The RDF data-model API now hides internal string/term records, interns borrowed term
+  values through a validated public boundary, exposes shared position validators, and
+  defines order-preserving graph/dataset removal.
+- The local suite has 56 tests; all 827 integrated official RDF cases pass.
 
 ## Milestone status
 
 - Milestone 1 — project skeleton and conventions: complete.
-- Milestone 2 — RDF 1.1 data model: substantially complete; API review remains.
+- Milestone 2 — RDF 1.1 data model: complete.
 - Milestone 3 — N-Triples and N-Quads: complete.
 - Milestone 4 — Turtle and TriG: complete.
 - Milestones 5–14: not started.
 
 ## Next actions
 
-1. Review the RDF data-model API before starting the indexed in-memory quad store.
-2. Begin store indexes and deterministic indexed iteration.
-3. Add transaction boundaries and rollback coverage.
+1. Add the indexed in-memory quad store with deterministic indexed iteration.
+2. Add transaction boundaries and rollback coverage.
+3. Document store complexity and mutation guarantees.
 
 ## Session log
 
@@ -423,3 +426,16 @@ separate packages only after their APIs and release cycles become independently 
 - Added exhaustive allocation-failure coverage for parsing and TriG serialization.
 - Completed the Turtle/TriG milestone with 53 local tests and all 827 official RDF
   syntax/evaluation cases passing.
+
+### 2026-10-24 — RDF data-model API review
+
+- Removed internal string identifiers and stored term records from the public API.
+- Added validated `TermPool.internView` construction for borrowed RDF term values,
+  including enforcement of the `rdf:langString` language-literal invariant.
+- Exposed shared triple and graph-name validation for reuse by higher-level stores.
+- Added order-preserving `Graph.remove` and `Dataset.remove` operations with explicit
+  absent-statement behavior.
+- Documented owner non-copyability, pool-local identifiers, blank-node scope, and
+  mutation invalidation of borrowed views, slices, and iterators.
+- Completed the RDF data-model milestone with 56 local tests and all 827 official RDF
+  cases passing.
