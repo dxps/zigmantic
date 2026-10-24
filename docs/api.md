@@ -161,6 +161,13 @@ This API is infrastructure for forward rule application. By itself it does not c
 that RDF or RDFS closure has been reached; conformance belongs to the rule sets layered
 on top of it.
 
+`materializeRdfCore` atomically adds the eight fixed RDF axiomatic triples that do not
+use container-membership properties and applies entailment pattern `rdfD2`, inferring
+that every predicate occurring in the union is an `rdf:Property`. It returns the number
+of newly inferred triples and is idempotent. Container-membership axioms and datatype
+pattern `rdfD1` remain outside this initial rule layer, so this is not yet a complete RDF
+entailment closure.
+
 ## IRI references
 
 `iri.resolveAlloc(allocator, base, reference)` returns an owned absolute IRI using the

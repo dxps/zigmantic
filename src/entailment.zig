@@ -16,6 +16,10 @@ pub const Origin = enum {
     all,
 };
 
+pub const MaterializeResult = struct {
+    inferred: usize,
+};
+
 /// Owns one RDF term scope and the union of asserted and inferred triples. Asserted
 /// provenance is tracked separately and takes precedence when a triple has both origins.
 pub const Materialization = struct {
@@ -106,6 +110,68 @@ pub const Materialization = struct {
         };
     }
 };
+
+/// Adds the eight fixed non-container RDF axiomatic triples and applies RDF 1.1
+/// entailment pattern `rdfD2`, which types every predicate occurring in the union as
+/// `rdf:Property`. The update is atomic and idempotent. Container-membership axioms and
+/// datatype entailment pattern `rdfD1` are not part of this layer.
+pub fn materializeRdfCore(materialization: *Materialization) store_mod.Error!MaterializeResult {
+    const pool = materialization.termPool();
+    const rdf_type = try pool.internNamedNode(rdf.rdf_namespace ++ "type");
+    const rdf_property = try pool.internNamedNode(rdf.rdf_namespace ++ "Property");
+    const rdf_list = try pool.internNamedNode(rdf.rdf_namespace ++ "List");
+
+    const axiom_subjects = [_]rdf.TermId{
+        rdf_type,
+        try pool.internNamedNode(rdf.rdf_namespace ++ "subject"),
+        try pool.internNamedNode(rdf.rdf_namespace ++ "predicate"),
+        try pool.internNamedNode(rdf.rdf_namespace ++ "object"),
+        try pool.internNamedNode(rdf.rdf_namespace ++ "first"),
+        try pool.internNamedNode(rdf.rdf_namespace ++ "rest"),
+        try pool.internNamedNode(rdf.rdf_namespace ++ "value"),
+    };
+    const rdf_nil = try pool.internNamedNode(rdf.rdf_namespace ++ "nil");
+
+    var predicates: std.ArrayList(rdf.TermId) = .empty;
+    defer predicates.deinit(materialization.allocator);
+    var triples = materialization.iterator(.all);
+    while (triples.next()) |triple| {
+        var seen = false;
+        for (predicates.items) |predicate| {
+            if (predicate == triple.predicate) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) try predicates.append(materialization.allocator, triple.predicate);
+    }
+
+    var transaction = try materialization.storage.beginTransaction();
+    defer transaction.deinit();
+    var inferred: usize = 0;
+    for (axiom_subjects) |subject| {
+        if (try transaction.add(toQuad(.{
+            .subject = subject,
+            .predicate = rdf_type,
+            .object = rdf_property,
+        }))) inferred += 1;
+    }
+    if (try transaction.add(toQuad(.{
+        .subject = rdf_nil,
+        .predicate = rdf_type,
+        .object = rdf_list,
+    }))) inferred += 1;
+
+    for (predicates.items) |predicate| {
+        if (try transaction.add(toQuad(.{
+            .subject = predicate,
+            .predicate = rdf_type,
+            .object = rdf_property,
+        }))) inferred += 1;
+    }
+    try transaction.commit();
+    return .{ .inferred = inferred };
+}
 
 pub const Iterator = struct {
     inner: store_mod.Iterator,
@@ -220,6 +286,53 @@ test "materialization owns terms copied from an asserted graph" {
     );
 }
 
+test "RDF core materialization adds finite vocabulary axioms" {
+    var materialization = Materialization.init(std.testing.allocator);
+    defer materialization.deinit();
+
+    const result = try materializeRdfCore(&materialization);
+    try std.testing.expectEqual(@as(usize, 8), result.inferred);
+    try std.testing.expectEqual(@as(usize, 0), materialization.len(.asserted));
+    try std.testing.expectEqual(@as(usize, 8), materialization.len(.inferred));
+
+    const pool = materialization.termPool();
+    const rdf_nil = try pool.internNamedNode(rdf.rdf_namespace ++ "nil");
+    const rdf_type = try pool.internNamedNode(rdf.rdf_namespace ++ "type");
+    const rdf_list = try pool.internNamedNode(rdf.rdf_namespace ++ "List");
+    try std.testing.expect(materialization.contains(.{
+        .subject = rdf_nil,
+        .predicate = rdf_type,
+        .object = rdf_list,
+    }));
+}
+
+test "RDF rdfD2 materialization types used predicates as properties" {
+    var materialization = Materialization.init(std.testing.allocator);
+    defer materialization.deinit();
+
+    const pool = materialization.termPool();
+    const subject = try pool.internNamedNode("https://example.com/subject");
+    const predicate = try pool.internNamedNode("https://example.com/predicate");
+    const object = try pool.internSimpleLiteral("object");
+    const assertion = rdf.Triple{ .subject = subject, .predicate = predicate, .object = object };
+    _ = try materialization.addAsserted(assertion);
+
+    const result = try materializeRdfCore(&materialization);
+    try std.testing.expectEqual(@as(usize, 9), result.inferred);
+    const rdf_type = try pool.internNamedNode(rdf.rdf_namespace ++ "type");
+    const rdf_property = try pool.internNamedNode(rdf.rdf_namespace ++ "Property");
+    try std.testing.expect(materialization.contains(.{
+        .subject = predicate,
+        .predicate = rdf_type,
+        .object = rdf_property,
+    }));
+    try std.testing.expectEqual(@as(usize, 1), materialization.len(.asserted));
+
+    const repeated = try materializeRdfCore(&materialization);
+    try std.testing.expectEqual(@as(usize, 0), repeated.inferred);
+    try std.testing.expectEqual(@as(usize, 10), materialization.len(.all));
+}
+
 fn exerciseMaterializationAllocations(allocator: std.mem.Allocator) !void {
     var graph = rdf.Graph.init(allocator);
     defer graph.deinit();
@@ -230,6 +343,7 @@ fn exerciseMaterializationAllocations(allocator: std.mem.Allocator) !void {
 
     var materialization = try Materialization.fromGraph(allocator, &graph);
     defer materialization.deinit();
+    _ = try materializeRdfCore(&materialization);
 }
 
 test "graph materialization handles every allocation failure without leaks" {

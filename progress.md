@@ -145,7 +145,9 @@ separate packages only after their APIs and release cycles become independently 
   preserving live order and every term identifier.
 - The public `entailment` module now has an owned materialization boundary with a shared
   term scope, indexed union, and distinct asserted/inferred provenance.
-- The local suite has 69 tests; all 827 integrated official RDF cases pass.
+- The first atomic RDF rule layer adds all eight fixed non-container axiomatic triples
+  and applies `rdfD2` predicate-property inference idempotently.
+- The local suite has 71 tests; all 827 integrated official RDF cases pass.
 
 ## Milestone status
 
@@ -155,13 +157,13 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 4 — Turtle and TriG: complete.
 - Milestone 5 — indexed in-memory quad store: complete.
 - Milestone 6 — RDF/RDFS semantics and entailment: in progress; the materialization
-  boundary is implemented, while RDF and RDFS rule layers remain.
+  boundary and first RDF rule layer are implemented; datatype and RDFS rules remain.
 - Milestones 7–14: not started.
 
 ## Next actions
 
-1. Implement RDF entailment rules and vocabulary axioms with focused semantic tests.
-2. Pin and integrate the official RDF model-theory entailment suite.
+1. Pin and integrate the official RDF model-theory entailment suite.
+2. Add target-aware container axioms and datatype pattern `rdfD1` as required by tests.
 3. Extend the rule engine to RDFS entailment and standard test coverage.
 
 ## Session log
@@ -505,3 +507,17 @@ separate packages only after their APIs and release cycles become independently 
 - Added provenance, promotion, source-ownership, and exhaustive allocation-failure
   coverage without claiming RDF or RDFS closure prematurely.
 - Passed all 69 local tests and retained all 827 official RDF conformance cases.
+
+### 2026-10-24 — RDF axioms and predicate entailment
+
+- Added atomic, idempotent `materializeRdfCore` rule application.
+- Added the eight fixed RDF axiomatic triples that do not contain container-membership
+  property IRIs.
+- Implemented RDF 1.1 entailment pattern `rdfD2`, typing every used predicate as an
+  `rdf:Property`.
+- Collected predicate inputs before mutation and applied every inferred triple inside a
+  store transaction so failures cannot expose a partial rule result.
+- Kept target-dependent container axioms and datatype pattern `rdfD1` explicitly outside
+  this initial layer rather than overstating closure completeness.
+- Added empty-graph axiom, predicate inference, idempotence, and allocation-failure
+  coverage while retaining all 827 existing official RDF cases.

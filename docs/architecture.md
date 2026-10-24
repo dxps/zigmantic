@@ -142,3 +142,10 @@ Rule layers may iterate the union and add inferred triples until a fixed point, 
 callers can still inspect asserted and inferred partitions independently. This reflects
 the RDF 1.1 Semantics distinction between valid entailment and an application's optional
 choice to construct entailed graphs.
+
+The first RDF rule layer adds the eight fixed non-container axiomatic triples and the
+`rdfD2` predicate-property consequences in one store transaction. Predicate identifiers
+are collected before mutation so no iterator spans structural changes. Any failure
+rolls back all inferred triples; repeated successful application reaches the same fixed
+point without adding duplicates. Datatype and target-dependent container axioms remain
+separate rule concerns.
