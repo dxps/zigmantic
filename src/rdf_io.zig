@@ -343,6 +343,11 @@ const TurtleLexer = struct {
         }
         if (classifyTurtleNumeric(word)) |tag| return .{ .tag = tag, .lexeme = word };
         if (std.mem.startsWith(u8, word, "_:")) {
+            if (std.mem.indexOfScalar(u8, word[2..], ':')) |colon| {
+                const end = start + 2 + colon;
+                self.index = end;
+                return .{ .tag = .blank_node_label, .lexeme = self.input[start + 2 .. end] };
+            }
             return .{ .tag = .blank_node_label, .lexeme = word[2..] };
         }
         if (std.mem.indexOfScalar(u8, word, ':') != null) {
@@ -1824,6 +1829,25 @@ test "Turtle parses labeled blank-node subjects and objects" {
     try std.testing.expectEqual(
         graph.items()[0].object,
         graph.items()[1].subject,
+    );
+}
+
+test "Turtle separates a blank-node label from an adjacent prefixed predicate" {
+    var graph = try parseTurtle(
+        std.testing.allocator,
+        "@prefix : <https://example.com/> . _:subject:predicate :object .",
+        .{},
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), graph.len());
+    try std.testing.expectEqualStrings(
+        "subject",
+        graph.terms.view(graph.items()[0].subject).?.blank_node,
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.com/predicate",
+        graph.terms.view(graph.items()[0].predicate).?.named_node,
     );
 }
 

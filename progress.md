@@ -130,25 +130,24 @@ separate packages only after their APIs and release cycles become independently 
   same pinned W3C revision as the other RDF syntax suites.
 - The TriG manifest runner executes all 357 syntax and evaluation entries. Evaluation
   uses dataset isomorphism, including blank-node graph names.
-- The current TriG baseline is 356 passing cases and one exact expected failure. TriG
-  conformance is not yet claimed.
-- The local suite has 49 tests; all 470 previously integrated official cases continue
-  to pass alongside the executable TriG baseline.
+- All 357 official RDF 1.1 TriG positive syntax, negative syntax, and evaluation cases
+  now pass with no exclusions.
+- The local suite has 50 tests; all 827 integrated official RDF cases pass.
 
 ## Milestone status
 
 - Milestone 1 — project skeleton and conventions: complete.
 - Milestone 2 — RDF 1.1 data model: substantially complete; API review remains.
 - Milestone 3 — N-Triples and N-Quads: complete.
-- Milestone 4 — Turtle and TriG: in progress; Turtle parsing and serialization are
-  complete, while TriG remains.
+- Milestone 4 — Turtle and TriG: in progress; both parsers pass their complete official
+  suites, while TriG serialization remains.
 - Milestones 5–14: not started.
 
 ## Next actions
 
-1. Diagnose and resolve the final minimal-whitespace TriG case.
-2. Reach a zero-exclusion pass of all 357 official TriG cases.
-3. Add deterministic expanded TriG serialization and dataset round-trip coverage.
+1. Add deterministic expanded TriG serialization and dataset round-trip coverage.
+2. Review the RDF data-model API before starting the indexed in-memory quad store.
+3. Begin store indexes, deterministic iteration, and transaction boundaries.
 
 ## Session log
 
@@ -400,3 +399,13 @@ separate packages only after their APIs and release cycles become independently 
 - Removed four cases from the executable failure baseline, leaving 356 of 357 official
   TriG cases passing and only the minimal-whitespace case unresolved.
 - Passed all 49 local tests and retained all 470 other official RDF cases.
+
+### 2026-10-24 — TriG parser conformance
+
+- Specialized blank-node label tokenization so an adjacent colon begins the following
+  prefixed name instead of becoming part of the blank-node label.
+- Added a focused no-whitespace regression test for a blank-node subject followed by a
+  default-prefix predicate.
+- Removed the final expected failure and passed all 357 official RDF 1.1 TriG syntax
+  and evaluation cases with no exclusions.
+- Passed all 50 local tests and all 827 integrated official RDF cases.

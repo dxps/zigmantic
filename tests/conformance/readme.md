@@ -42,5 +42,5 @@ build, and any future temporary exclusion must be identified by its exact manife
 
 The TriG runner likewise executes syntax and evaluation entries. Evaluation datasets
 are compared by RDF dataset isomorphism, including blank nodes used as graph names. Its
-expected-failure list is an executable implementation-gap baseline: an unlisted failure
-or a listed case that starts passing both fail the build until reviewed.
+executable expected-failure list is currently empty; all 357 manifest entries pass, and
+any regression fails the build.
