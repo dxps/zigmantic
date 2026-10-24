@@ -121,21 +121,24 @@ separate packages only after their APIs and release cycles become independently 
   uses RDF graph isomorphism so blank-node labels need not match.
 - All 313 official RDF 1.1 Turtle positive syntax, negative syntax, and evaluation cases
   now pass with no exclusions.
+- Deterministic expanded Turtle serialization emits one absolute-IRI triple per line and
+  round trips nested Turtle graphs stably without reconstructing syntactic shorthand.
+- The local suite has 43 tests; all 470 official RDF syntax/evaluation cases pass.
 
 ## Milestone status
 
 - Milestone 1 — project skeleton and conventions: complete.
 - Milestone 2 — RDF 1.1 data model: substantially complete; API review remains.
 - Milestone 3 — N-Triples and N-Quads: complete.
-- Milestone 4 — Turtle and TriG: in progress; Turtle parsing passes the complete official
-  manifest, while Turtle serialization and TriG remain.
+- Milestone 4 — Turtle and TriG: in progress; Turtle parsing and serialization are
+  complete, while TriG remains.
 - Milestones 5–14: not started.
 
 ## Next actions
 
-1. Design and implement deterministic Turtle serialization.
-2. Add parse/serialize/parse graph-isomorphism and allocation-failure coverage.
-3. Begin TriG graph syntax using the shared Turtle lexer and parser foundations.
+1. Begin TriG graph syntax using the shared Turtle lexer and parser foundations.
+2. Add named-graph blocks and default-graph blocks returning an owned dataset.
+3. Pin the official TriG suite and drive syntax/evaluation conformance.
 
 ## Session log
 
@@ -328,3 +331,16 @@ separate packages only after their APIs and release cycles become independently 
   standalone empty anonymous nodes.
 - Eliminated all 18 tracked failures and passed all 313 official Turtle cases with no
   exclusions, alongside 40 local and 157 line-syntax cases.
+
+### 2026-10-24 — Turtle serialization
+
+- Added allocator-owned `serializeTurtleAlloc` output.
+- Chose deterministic expanded Turtle using the N-Triples-compatible subset rather than
+  inventing prefixes or heuristically reconstructing source shorthand.
+- Shared the graph-writing implementation with canonical-layout N-Triples serialization.
+- Preserved graph iteration order, term lexical forms, language tags, datatypes, and
+  explicit blank-node identity.
+- Added byte-exact output and stable parse/serialize/parse coverage using nested property
+  lists and collections.
+- Added exhaustive allocation-failure coverage for parsing and Turtle serialization.
+- Passed all 43 local tests and all 470 official RDF syntax/evaluation cases.

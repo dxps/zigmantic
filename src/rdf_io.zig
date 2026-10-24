@@ -68,6 +68,23 @@ pub fn serializeNTriplesAlloc(
     allocator: std.mem.Allocator,
     graph: *const rdf.Graph,
 ) SerializeError![]u8 {
+    return serializeExpandedGraphAlloc(allocator, graph);
+}
+
+/// Serializes a graph as deterministic, expanded RDF 1.1 Turtle.
+/// The output deliberately uses the N-Triples-compatible Turtle subset: one triple per
+/// line, absolute IRIs, explicit datatypes, and explicit blank-node labels.
+pub fn serializeTurtleAlloc(
+    allocator: std.mem.Allocator,
+    graph: *const rdf.Graph,
+) SerializeError![]u8 {
+    return serializeExpandedGraphAlloc(allocator, graph);
+}
+
+fn serializeExpandedGraphAlloc(
+    allocator: std.mem.Allocator,
+    graph: *const rdf.Graph,
+) SerializeError![]u8 {
     var output: std.ArrayList(u8) = .empty;
     errdefer output.deinit(allocator);
 
@@ -1769,6 +1786,61 @@ test "Turtle represents an empty collection as rdf:nil" {
     try std.testing.expectEqualStrings(
         rdf.rdf_namespace ++ "nil",
         graph.terms.view(graph.items()[0].subject).?.named_node,
+    );
+}
+
+test "Turtle serializer emits deterministic expanded syntax" {
+    const input =
+        "@prefix ex: <https://example.com/> .\n" ++
+        "ex:s ex:p \"line\\nvalue\" .\n" ++
+        "_:node ex:p \"Salut\"@RO .\n";
+    var graph = try parseTurtle(std.testing.allocator, input, .{});
+    defer graph.deinit();
+    const serialized = try serializeTurtleAlloc(std.testing.allocator, &graph);
+    defer std.testing.allocator.free(serialized);
+
+    try std.testing.expectEqualStrings(
+        "<https://example.com/s> <https://example.com/p> \"line\\nvalue\" .\n" ++
+            "_:node <https://example.com/p> \"Salut\"@ro .\n",
+        serialized,
+    );
+}
+
+test "Turtle expanded serialization round trips stably" {
+    const input =
+        "@prefix ex: <https://example.com/> .\n" ++
+        "[ ex:name \"Alice\" ; ex:items (ex:first [ ex:name \"second\" ] ()) ] " ++
+        "a ex:Container .\n";
+    var first = try parseTurtle(std.testing.allocator, input, .{});
+    defer first.deinit();
+    const serialized = try serializeTurtleAlloc(std.testing.allocator, &first);
+    defer std.testing.allocator.free(serialized);
+
+    var second = try parseTurtle(std.testing.allocator, serialized, .{});
+    defer second.deinit();
+    const serialized_again = try serializeTurtleAlloc(std.testing.allocator, &second);
+    defer std.testing.allocator.free(serialized_again);
+
+    try std.testing.expectEqual(first.len(), second.len());
+    try std.testing.expectEqualStrings(serialized, serialized_again);
+}
+
+fn exerciseTurtleSerializationAllocations(allocator: std.mem.Allocator) !void {
+    var graph = try parseTurtle(
+        allocator,
+        "@prefix ex: <https://example.com/> . _:s ex:p \"Bună\\nziua\"@ro .",
+        .{},
+    );
+    defer graph.deinit();
+    const serialized = try serializeTurtleAlloc(allocator, &graph);
+    defer allocator.free(serialized);
+}
+
+test "Turtle serialization handles every allocation failure without leaks" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseTurtleSerializationAllocations,
+        .{},
     );
 }
 

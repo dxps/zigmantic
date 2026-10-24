@@ -81,3 +81,9 @@ Collections are expanded during parsing into fresh blank-node cells connected by
 `rdf:first` and `rdf:rest`. Empty collections and the final rest link use the interned
 `rdf:nil` IRI. Collection items recurse through the normal object parser, so nested
 collections and property lists share the same ownership and identity rules.
+
+Turtle serialization uses an expanded representation shared with the canonical-layout
+N-Triples writer. This is a valid Turtle subset and avoids heuristic reconstruction of
+prefix declarations, property lists, or collections from graph structure. The output is
+deterministic for a graph's iteration order and blank-node identifiers, but it is not an
+RDF graph canonicalization algorithm.

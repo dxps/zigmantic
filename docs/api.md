@@ -9,6 +9,7 @@
 - `rdf_io.parseTurtle` returns an owned `rdf.Graph`.
 - `rdf_io.serializeNTriplesAlloc` and `rdf_io.serializeNQuadsAlloc` return owned byte
   slices that the caller frees with the allocator passed to the function.
+- `rdf_io.serializeTurtleAlloc` likewise returns an allocator-owned byte slice.
 - Term views and statement slices are borrowed and remain valid only while their owner
   remains alive and structurally unchanged.
 
@@ -48,6 +49,16 @@ itself.
 The returned graph owns all parsed terms and follows the same lifetime and error rules
 as `parseNTriples`. Parser behavior is checked against all 313 positive syntax, negative
 syntax, and evaluation entries in the official RDF 1.1 Turtle manifest.
+
+`serializeTurtleAlloc(allocator, graph)` emits deterministic expanded Turtle using the
+N-Triples-compatible subset: one triple per line, absolute IRIs, explicit blank-node
+labels, and explicit non-string datatypes. This representation is intentionally stable
+and universally parseable; it does not invent prefixes or reconstruct property lists
+and collections from their RDF graph expansion.
+
+Output follows graph iteration order. The serializer does not sort statements,
+canonicalize blank nodes, or promise byte-identical output for isomorphic graphs built
+with different ordering or blank-node identifiers.
 
 ## IRI references
 
