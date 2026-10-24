@@ -36,9 +36,8 @@ pub fn parseTurtle(
     return graph;
 }
 
-/// Parses the currently implemented RDF 1.1 TriG subset into an owned dataset.
-/// Turtle statements, named graph blocks, `GRAPH` blocks, and default graph blocks are
-/// supported. The official TriG suite will define the final conformance boundary.
+/// Implements the RDF 1.1 TriG grammar and resolves relative IRIs against the document
+/// base supplied through `options` or declared in the input.
 pub fn parseTriG(
     allocator: std.mem.Allocator,
     input: []const u8,
@@ -96,6 +95,38 @@ pub fn serializeTurtleAlloc(
     graph: *const rdf.Graph,
 ) SerializeError![]u8 {
     return serializeExpandedGraphAlloc(allocator, graph);
+}
+
+/// Serializes a dataset as deterministic, expanded RDF 1.1 TriG.
+/// Default-graph triples use the N-Triples-compatible form. Each named-graph quad uses
+/// its own `GRAPH name { ... }` block so dataset iteration order is preserved exactly.
+pub fn serializeTriGAlloc(
+    allocator: std.mem.Allocator,
+    dataset: *const rdf.Dataset,
+) SerializeError![]u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+
+    for (dataset.items()) |quad| {
+        switch (quad.graph_name) {
+            .default => {},
+            .named => |graph_name| {
+                try output.appendSlice(allocator, "GRAPH ");
+                try appendTerm(allocator, &output, &dataset.terms, graph_name);
+                try output.appendSlice(allocator, " { ");
+            },
+        }
+        try appendTerm(allocator, &output, &dataset.terms, quad.subject);
+        try output.append(allocator, ' ');
+        try appendTerm(allocator, &output, &dataset.terms, quad.predicate);
+        try output.append(allocator, ' ');
+        try appendTerm(allocator, &output, &dataset.terms, quad.object);
+        switch (quad.graph_name) {
+            .default => try output.appendSlice(allocator, " .\n"),
+            .named => try output.appendSlice(allocator, " . }\n"),
+        }
+    }
+    return output.toOwnedSlice(allocator);
 }
 
 fn serializeExpandedGraphAlloc(
@@ -2105,6 +2136,72 @@ test "TriG supports anonymous blank-node graph names" {
     try std.testing.expect(dataset.terms.view(first_name).? == .blank_node);
     try std.testing.expect(dataset.terms.view(second_name).? == .blank_node);
     try std.testing.expect(first_name != second_name);
+}
+
+test "TriG expanded serialization has deterministic byte output" {
+    var dataset = rdf.Dataset.init(std.testing.allocator);
+    defer dataset.deinit();
+
+    const subject = try dataset.terms.internNamedNode("https://example.com/s");
+    const predicate = try dataset.terms.internNamedNode("https://example.com/p");
+    const object = try dataset.terms.internLanguageLiteral("Bună\nziua", "RO");
+    const graph = try dataset.terms.internBlankNode("graph");
+    _ = try dataset.addDefault(.{ .subject = subject, .predicate = predicate, .object = object });
+    _ = try dataset.add(.{
+        .subject = subject,
+        .predicate = predicate,
+        .object = object,
+        .graph_name = .{ .named = graph },
+    });
+
+    const output = try serializeTriGAlloc(std.testing.allocator, &dataset);
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        "<https://example.com/s> <https://example.com/p> \"Bună\\nziua\"@ro .\n" ++
+            "GRAPH _:graph { <https://example.com/s> <https://example.com/p> \"Bună\\nziua\"@ro . }\n",
+        output,
+    );
+}
+
+test "TriG expanded serialization round trips stably" {
+    const input =
+        "@prefix ex: <https://example.com/> .\n" ++
+        "ex:s ex:p [ ex:name \"default\" ] .\n" ++
+        "GRAPH _:graph { _:shared ex:p (ex:first ex:second) }\n" ++
+        "ex:named { ex:s ex:p _:shared }";
+    var first = try parseTriG(std.testing.allocator, input, .{});
+    defer first.deinit();
+    const serialized = try serializeTriGAlloc(std.testing.allocator, &first);
+    defer std.testing.allocator.free(serialized);
+
+    var second = try parseTriG(std.testing.allocator, serialized, .{});
+    defer second.deinit();
+    const serialized_again = try serializeTriGAlloc(std.testing.allocator, &second);
+    defer std.testing.allocator.free(serialized_again);
+
+    try std.testing.expectEqual(first.len(), second.len());
+    try std.testing.expectEqualStrings(serialized, serialized_again);
+}
+
+fn exerciseTriGSerializationAllocations(allocator: std.mem.Allocator) !void {
+    var dataset = try parseTriG(
+        allocator,
+        "@prefix ex: <https://example.com/> . " ++
+            "ex:s ex:p \"default\" . " ++
+            "GRAPH _:graph { _:s ex:p \"Bună\\nziua\"@ro }",
+        .{},
+    );
+    defer dataset.deinit();
+    const serialized = try serializeTriGAlloc(allocator, &dataset);
+    defer allocator.free(serialized);
+}
+
+test "TriG serialization handles every allocation failure without leaks" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseTriGSerializationAllocations,
+        .{},
+    );
 }
 
 test "Turtle still requires a dot after a top-level triple" {

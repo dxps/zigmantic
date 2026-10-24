@@ -10,7 +10,8 @@
 - `rdf_io.parseTriG` returns an owned `rdf.Dataset`.
 - `rdf_io.serializeNTriplesAlloc` and `rdf_io.serializeNQuadsAlloc` return owned byte
   slices that the caller frees with the allocator passed to the function.
-- `rdf_io.serializeTurtleAlloc` likewise returns an allocator-owned byte slice.
+- `rdf_io.serializeTurtleAlloc` and `rdf_io.serializeTriGAlloc` likewise return
+  allocator-owned byte slices.
 - Term views and statement slices are borrowed and remain valid only while their owner
   remains alive and structurally unchanged.
 
@@ -63,15 +64,26 @@ with different ordering or blank-node identifiers.
 
 ## TriG
 
-`parseTriG(allocator, input, options)` currently implements the first TriG parser slice
-and returns an owned dataset. It accepts Turtle statements in the default graph, `{ ...
-}` default-graph blocks, `name { ... }` named-graph blocks, and `GRAPH name { ... }`
-blocks. Graph names may be IRIs, prefixed names, or labeled blank nodes.
+`parseTriG(allocator, input, options)` implements the RDF 1.1 TriG grammar and returns an
+owned dataset. It accepts Turtle statements in the default graph, `{ ... }`
+default-graph blocks, `name { ... }` named-graph blocks, and `GRAPH name { ... }`
+blocks. Graph names may be IRIs, prefixed names, labeled blank nodes, or anonymous blank
+nodes.
 
-Base and prefix declarations, RDF terms, property lists, collections, and blank-node
-identity use the same implementation and document scope as Turtle. The API follows the
-same ownership and `ParseError` conventions. TriG conformance is not yet claimed; the
-official manifest remains to be pinned and executed.
+Base and prefix declarations are document-level. RDF terms, property lists,
+collections, and blank-node identity use the same implementation as Turtle. The API
+follows the same ownership and `ParseError` conventions. Parser behavior is checked
+against all 357 positive syntax, negative syntax, and evaluation entries in the
+official RDF 1.1 TriG manifest.
+
+`serializeTriGAlloc(allocator, dataset)` emits deterministic expanded TriG. Default
+graph triples use one N-Triples-compatible statement per line. Every named-graph quad
+uses its own `GRAPH name { triple . }` block, including blank-node graph names. This
+deliberately favors stable output over grouping adjacent quads or inventing prefixes.
+
+Output follows dataset iteration order. The serializer does not sort quads, relabel
+blank nodes, or promise byte-identical output for isomorphic datasets built with
+different ordering or blank-node identifiers.
 
 ## IRI references
 

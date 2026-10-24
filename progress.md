@@ -132,22 +132,23 @@ separate packages only after their APIs and release cycles become independently 
   uses dataset isomorphism, including blank-node graph names.
 - All 357 official RDF 1.1 TriG positive syntax, negative syntax, and evaluation cases
   now pass with no exclusions.
-- The local suite has 50 tests; all 827 integrated official RDF cases pass.
+- Deterministic expanded TriG serialization emits default triples directly and one
+  explicit `GRAPH` block per named-graph quad while preserving dataset iteration order.
+- The local suite has 53 tests; all 827 integrated official RDF cases pass.
 
 ## Milestone status
 
 - Milestone 1 — project skeleton and conventions: complete.
 - Milestone 2 — RDF 1.1 data model: substantially complete; API review remains.
 - Milestone 3 — N-Triples and N-Quads: complete.
-- Milestone 4 — Turtle and TriG: in progress; both parsers pass their complete official
-  suites, while TriG serialization remains.
+- Milestone 4 — Turtle and TriG: complete.
 - Milestones 5–14: not started.
 
 ## Next actions
 
-1. Add deterministic expanded TriG serialization and dataset round-trip coverage.
-2. Review the RDF data-model API before starting the indexed in-memory quad store.
-3. Begin store indexes, deterministic iteration, and transaction boundaries.
+1. Review the RDF data-model API before starting the indexed in-memory quad store.
+2. Begin store indexes and deterministic indexed iteration.
+3. Add transaction boundaries and rollback coverage.
 
 ## Session log
 
@@ -409,3 +410,16 @@ separate packages only after their APIs and release cycles become independently 
 - Removed the final expected failure and passed all 357 official RDF 1.1 TriG syntax
   and evaluation cases with no exclusions.
 - Passed all 50 local tests and all 827 integrated official RDF cases.
+
+### 2026-10-24 — TriG serialization
+
+- Added allocator-owned `serializeTriGAlloc` output.
+- Chose deterministic expanded TriG with direct default-graph statements and one
+  explicit `GRAPH name { triple . }` block per named-graph quad.
+- Preserved dataset iteration order, graph names, term lexical forms, language tags,
+  datatypes, and document-wide blank-node identity.
+- Added byte-exact output and stable parse/serialize/parse coverage across default and
+  named graphs.
+- Added exhaustive allocation-failure coverage for parsing and TriG serialization.
+- Completed the Turtle/TriG milestone with 53 local tests and all 827 official RDF
+  syntax/evaluation cases passing.
