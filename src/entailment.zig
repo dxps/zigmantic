@@ -173,6 +173,165 @@ pub fn materializeRdfCore(materialization: *Materialization) store_mod.Error!Mat
     return .{ .inferred = inferred };
 }
 
+/// Adds the RDF and RDFS axioms for every `rdf:_n` container-membership IRI
+/// occurring in either the materialization or the requested conclusion graph.
+/// It also applies the corresponding `rdfs12` and `rdfs7` consequences. When
+/// neither graph names a membership property, `rdf:_1` is used as the finite
+/// closure witness required by the RDF 1.1 Semantics closure construction.
+/// The triple update is atomic and idempotent.
+pub fn materializeRdfsContainerMembership(
+    materialization: *Materialization,
+    target: *const rdf.Graph,
+) store_mod.Error!MaterializeResult {
+    var membership_properties: std.ArrayList(rdf.TermId) = .empty;
+    defer membership_properties.deinit(materialization.allocator);
+
+    var triples = materialization.iterator(.all);
+    while (triples.next()) |triple| {
+        try collectMembershipTerm(
+            materialization.termPool(),
+            materialization.termPoolConst(),
+            triple.subject,
+            &membership_properties,
+            materialization.allocator,
+        );
+        try collectMembershipTerm(
+            materialization.termPool(),
+            materialization.termPoolConst(),
+            triple.predicate,
+            &membership_properties,
+            materialization.allocator,
+        );
+        try collectMembershipTerm(
+            materialization.termPool(),
+            materialization.termPoolConst(),
+            triple.object,
+            &membership_properties,
+            materialization.allocator,
+        );
+    }
+    for (target.items()) |triple| {
+        try collectMembershipTerm(
+            materialization.termPool(),
+            &target.terms,
+            triple.subject,
+            &membership_properties,
+            materialization.allocator,
+        );
+        try collectMembershipTerm(
+            materialization.termPool(),
+            &target.terms,
+            triple.predicate,
+            &membership_properties,
+            materialization.allocator,
+        );
+        try collectMembershipTerm(
+            materialization.termPool(),
+            &target.terms,
+            triple.object,
+            &membership_properties,
+            materialization.allocator,
+        );
+    }
+    if (membership_properties.items.len == 0) {
+        try membership_properties.append(
+            materialization.allocator,
+            try materialization.termPool().internNamedNode(rdf.rdf_namespace ++ "_1"),
+        );
+    }
+
+    var membership_assertions: std.ArrayList(rdf.Triple) = .empty;
+    defer membership_assertions.deinit(materialization.allocator);
+    triples = materialization.iterator(.all);
+    while (triples.next()) |triple| {
+        if (containsTerm(membership_properties.items, triple.predicate)) {
+            try membership_assertions.append(materialization.allocator, triple);
+        }
+    }
+
+    const pool = materialization.termPool();
+    const rdf_type = try pool.internNamedNode(rdf.rdf_namespace ++ "type");
+    const rdf_property = try pool.internNamedNode(rdf.rdf_namespace ++ "Property");
+    const rdfs_container_membership_property = try pool.internNamedNode(
+        rdf.rdfs_namespace ++ "ContainerMembershipProperty",
+    );
+    const rdfs_domain = try pool.internNamedNode(rdf.rdfs_namespace ++ "domain");
+    const rdfs_range = try pool.internNamedNode(rdf.rdfs_namespace ++ "range");
+    const rdfs_resource = try pool.internNamedNode(rdf.rdfs_namespace ++ "Resource");
+    const rdfs_sub_property_of = try pool.internNamedNode(rdf.rdfs_namespace ++ "subPropertyOf");
+    const rdfs_member = try pool.internNamedNode(rdf.rdfs_namespace ++ "member");
+
+    var transaction = try materialization.storage.beginTransaction();
+    defer transaction.deinit();
+    var inferred: usize = 0;
+    for (membership_properties.items) |property| {
+        const axioms = [_]rdf.Triple{
+            .{ .subject = property, .predicate = rdf_type, .object = rdf_property },
+            .{ .subject = property, .predicate = rdf_type, .object = rdfs_container_membership_property },
+            .{ .subject = property, .predicate = rdfs_domain, .object = rdfs_resource },
+            .{ .subject = property, .predicate = rdfs_range, .object = rdfs_resource },
+            .{ .subject = property, .predicate = rdfs_sub_property_of, .object = rdfs_member },
+        };
+        for (axioms) |axiom| {
+            if (try transaction.add(toQuad(axiom))) inferred += 1;
+        }
+    }
+    for (membership_assertions.items) |assertion| {
+        if (try transaction.add(toQuad(.{
+            .subject = assertion.subject,
+            .predicate = rdfs_member,
+            .object = assertion.object,
+        }))) inferred += 1;
+    }
+    try transaction.commit();
+    return .{ .inferred = inferred };
+}
+
+fn collectMembershipTerm(
+    destination: *rdf.TermPool,
+    source: *const rdf.TermPool,
+    term: rdf.TermId,
+    properties: *std.ArrayList(rdf.TermId),
+    allocator: std.mem.Allocator,
+) store_mod.Error!void {
+    const view = source.view(term) orelse return error.UnknownTerm;
+    const iri = switch (view) {
+        .named_node => |named_node| named_node,
+        .literal => |literal| literal.datatype,
+        .blank_node => return,
+    };
+    if (!isContainerMembershipIri(iri)) return;
+    const local = try destination.internNamedNode(iri);
+    if (!containsTerm(properties.items, local)) try properties.append(allocator, local);
+}
+
+fn containsTerm(terms: []const rdf.TermId, wanted: rdf.TermId) bool {
+    for (terms) |term| {
+        if (term == wanted) return true;
+    }
+    return false;
+}
+
+fn isContainerMembershipIri(iri: []const u8) bool {
+    const prefix = rdf.rdf_namespace ++ "_";
+    if (!std.mem.startsWith(u8, iri, prefix)) return false;
+    const index = iri[prefix.len..];
+    if (index.len == 0 or index[0] < '1' or index[0] > '9') return false;
+    for (index[1..]) |byte| {
+        if (!std.ascii.isDigit(byte)) return false;
+    }
+    return true;
+}
+
+test "container membership IRIs use canonical positive decimal indices" {
+    try std.testing.expect(isContainerMembershipIri(rdf.rdf_namespace ++ "_1"));
+    try std.testing.expect(isContainerMembershipIri(rdf.rdf_namespace ++ "_42"));
+    try std.testing.expect(!isContainerMembershipIri(rdf.rdf_namespace ++ "_"));
+    try std.testing.expect(!isContainerMembershipIri(rdf.rdf_namespace ++ "_0"));
+    try std.testing.expect(!isContainerMembershipIri(rdf.rdf_namespace ++ "_01"));
+    try std.testing.expect(!isContainerMembershipIri(rdf.rdf_namespace ++ "_x"));
+}
+
 pub const Iterator = struct {
     inner: store_mod.Iterator,
     asserted: *const std.AutoHashMapUnmanaged(TripleKey, void),
@@ -333,6 +492,80 @@ test "RDF rdfD2 materialization types used predicates as properties" {
     try std.testing.expectEqual(@as(usize, 10), materialization.len(.all));
 }
 
+test "RDFS container materialization adds target-aware axioms and membership" {
+    var materialization = Materialization.init(std.testing.allocator);
+    defer materialization.deinit();
+
+    const pool = materialization.termPool();
+    const subject = try pool.internNamedNode("https://example.com/container");
+    const membership = try pool.internNamedNode(rdf.rdf_namespace ++ "_42");
+    const object = try pool.internNamedNode("https://example.com/member");
+    _ = try materialization.addAsserted(.{
+        .subject = subject,
+        .predicate = membership,
+        .object = object,
+    });
+
+    var target = rdf.Graph.init(std.testing.allocator);
+    defer target.deinit();
+    const target_subject = try target.terms.internNamedNode("https://example.com/container");
+    const target_member = try target.terms.internNamedNode(rdf.rdfs_namespace ++ "member");
+    const target_object = try target.terms.internNamedNode("https://example.com/member");
+    _ = try target.add(.{
+        .subject = target_subject,
+        .predicate = target_member,
+        .object = target_object,
+    });
+
+    const result = try materializeRdfsContainerMembership(&materialization, &target);
+    try std.testing.expectEqual(@as(usize, 6), result.inferred);
+    const rdf_type = try pool.internNamedNode(rdf.rdf_namespace ++ "type");
+    const membership_class = try pool.internNamedNode(rdf.rdfs_namespace ++ "ContainerMembershipProperty");
+    const member = try pool.internNamedNode(rdf.rdfs_namespace ++ "member");
+    try std.testing.expect(materialization.contains(.{
+        .subject = membership,
+        .predicate = rdf_type,
+        .object = membership_class,
+    }));
+    try std.testing.expect(materialization.contains(.{
+        .subject = subject,
+        .predicate = member,
+        .object = object,
+    }));
+
+    const repeated = try materializeRdfsContainerMembership(&materialization, &target);
+    try std.testing.expectEqual(@as(usize, 0), repeated.inferred);
+}
+
+test "RDFS container materialization includes membership IRIs named only by target" {
+    var materialization = Materialization.init(std.testing.allocator);
+    defer materialization.deinit();
+    var target = rdf.Graph.init(std.testing.allocator);
+    defer target.deinit();
+
+    const membership = try target.terms.internNamedNode(rdf.rdf_namespace ++ "_7");
+    const rdf_type = try target.terms.internNamedNode(rdf.rdf_namespace ++ "type");
+    const membership_class = try target.terms.internNamedNode(rdf.rdfs_namespace ++ "ContainerMembershipProperty");
+    _ = try target.add(.{
+        .subject = membership,
+        .predicate = rdf_type,
+        .object = membership_class,
+    });
+
+    const result = try materializeRdfsContainerMembership(&materialization, &target);
+    try std.testing.expectEqual(@as(usize, 5), result.inferred);
+    const local_membership = try materialization.termPool().internNamedNode(rdf.rdf_namespace ++ "_7");
+    const local_type = try materialization.termPool().internNamedNode(rdf.rdf_namespace ++ "type");
+    const local_class = try materialization.termPool().internNamedNode(
+        rdf.rdfs_namespace ++ "ContainerMembershipProperty",
+    );
+    try std.testing.expect(materialization.contains(.{
+        .subject = local_membership,
+        .predicate = local_type,
+        .object = local_class,
+    }));
+}
+
 fn exerciseMaterializationAllocations(allocator: std.mem.Allocator) !void {
     var graph = rdf.Graph.init(allocator);
     defer graph.deinit();
@@ -344,6 +577,7 @@ fn exerciseMaterializationAllocations(allocator: std.mem.Allocator) !void {
     var materialization = try Materialization.fromGraph(allocator, &graph);
     defer materialization.deinit();
     _ = try materializeRdfCore(&materialization);
+    _ = try materializeRdfsContainerMembership(&materialization, &graph);
 }
 
 test "graph materialization handles every allocation failure without leaks" {

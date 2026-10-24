@@ -151,9 +151,11 @@ separate packages only after their APIs and release cycles become independently 
   are vendored at the same pinned W3C revision as the syntax suites.
 - The model-theory runner covers all 51 simple, RDF, and RDFS entailment entries with
   existential blank-node matching and an exact expected-failure baseline.
-- The current semantic baseline passes 29 cases and tracks 22 failures covering the
-  unimplemented datatype, container-membership, inconsistency, and RDFS behavior.
-- The local suite has 71 tests; all 827 integrated syntax/evaluation cases still pass.
+- Target-aware `rdf:_n` axioms plus the directly corresponding `rdfs12` and `rdfs7`
+  consequences implement RDFS container-membership semantics.
+- The current semantic baseline passes 32 cases and tracks 19 failures covering the
+  unimplemented datatype, inconsistency, and general RDFS behavior.
+- The local suite has 74 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -163,15 +165,17 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 4 — Turtle and TriG: complete.
 - Milestone 5 — indexed in-memory quad store: complete.
 - Milestone 6 — RDF/RDFS semantics and entailment: in progress; the materialization
-  boundary and first RDF rule layer are implemented; datatype and RDFS rules remain.
+  boundary, RDF core, and container-membership layer are implemented; datatype and
+  general RDFS rules remain.
 - Milestones 7–14: not started.
 
 ## Next actions
 
-1. Add target-aware `rdf:_n` container-membership axioms required by conclusions.
+1. Add the finite non-container RDFS axiomatic triples and general `rdfs1`–`rdfs13`
+   fixed-point rules.
 2. Implement datatype interpretation, lexical validation, value equality, and
    inconsistency detection incrementally against the exact failing cases.
-3. Extend the rule engine to RDFS entailment and remove newly passing cases from the
+3. Audit complete RDF/RDFS closure behavior and remove every newly passing case from the
    executable baseline.
 
 ## Session log
@@ -542,3 +546,16 @@ separate packages only after their APIs and release cycles become independently 
   datatype inconsistency detection is not implemented yet.
 - Established an executable baseline of 29 passing cases and 22 exact known failures;
   regressions and newly passing cases both require deliberate baseline updates.
+
+### 2026-10-24 — RDFS container-membership semantics
+
+- Added target-aware discovery of valid `rdf:_n` vocabulary in source and conclusion
+  graphs, including datatype IRIs and the specified `rdf:_1` fallback witness.
+- Added RDF/RDFS type, domain, range, and subproperty facts for each discovered
+  container-membership property.
+- Applied the directly corresponding `rdfs12` and `rdfs7` consequences so indexed
+  membership assertions entail equivalent `rdfs:member` triples.
+- Kept the update transactional and idempotent, with target-only, propagation, and
+  exhaustive allocation-failure coverage.
+- Removed all three container cases from the expected-failure baseline, raising the
+  official model-theory result from 29/51 to 32/51 while passing all 74 local tests.

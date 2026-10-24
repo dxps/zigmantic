@@ -8,6 +8,7 @@
 const std = @import("std");
 
 pub const rdf_namespace = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+pub const rdfs_namespace = "http://www.w3.org/2000/01/rdf-schema#";
 pub const rdf_lang_string = rdf_namespace ++ "langString";
 pub const xsd_namespace = "http://www.w3.org/2001/XMLSchema#";
 pub const xsd_string = xsd_namespace ++ "string";

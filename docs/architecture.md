@@ -147,5 +147,11 @@ The first RDF rule layer adds the eight fixed non-container axiomatic triples an
 `rdfD2` predicate-property consequences in one store transaction. Predicate identifiers
 are collected before mutation so no iterator spans structural changes. Any failure
 rolls back all inferred triples; repeated successful application reaches the same fixed
-point without adding duplicates. Datatype and target-dependent container axioms remain
-separate rule concerns.
+point without adding duplicates.
+
+The container-membership layer is conclusion-aware because the RDF 1.1 finite closure
+procedure instantiates the infinite `rdf:_n` axiom family toward the graph being tested.
+It also includes membership IRIs already present in the source, recognizes only positive
+decimal indices without leading zeroes, and applies the directly corresponding `rdfs12`
+and `rdfs7` consequences. Its additions are independently transactional and idempotent.
+Datatype interpretation and general RDFS fixed-point rules remain separate concerns.

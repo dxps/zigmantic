@@ -164,9 +164,16 @@ on top of it.
 `materializeRdfCore` atomically adds the eight fixed RDF axiomatic triples that do not
 use container-membership properties and applies entailment pattern `rdfD2`, inferring
 that every predicate occurring in the union is an `rdf:Property`. It returns the number
-of newly inferred triples and is idempotent. Container-membership axioms and datatype
-pattern `rdfD1` remain outside this initial rule layer, so this is not yet a complete RDF
-entailment closure.
+of newly inferred triples and is idempotent.
+
+`materializeRdfsContainerMembership` accepts the requested conclusion graph so the
+otherwise infinite `rdf:_n` axiom family can be instantiated finitely. It discovers
+valid membership-property IRIs in both the materialization and conclusion vocabulary,
+adds their RDF/RDFS type, domain, range, and `rdfs:subPropertyOf rdfs:member` facts, and
+propagates matching membership assertions through `rdfs:member`. If neither graph names
+one, it uses `rdf:_1` as the closure witness required by RDF 1.1 Semantics. The update is
+atomic and idempotent. Datatype pattern `rdfD1` and general RDFS closure remain separate,
+so these APIs do not yet claim complete RDF or RDFS entailment.
 
 ## IRI references
 

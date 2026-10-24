@@ -125,16 +125,26 @@ fn runCase(comptime suite_dir: []const u8, case: Case) !bool {
     const allocator = std.testing.allocator;
     var source = try parseSuiteGraph(allocator, suite_dir, case.action);
     defer source.deinit();
+    var expected: ?rdf.Graph = if (case.result) |result_name|
+        try parseSuiteGraph(allocator, suite_dir, result_name)
+    else
+        null;
+    defer if (expected) |*graph| graph.deinit();
+
     var actual = try entailment.Materialization.fromGraph(allocator, &source);
     defer actual.deinit();
 
     if (case.regime != .simple) _ = try entailment.materializeRdfCore(&actual);
+    if (case.regime == .rdfs) {
+        if (expected) |*target| {
+            _ = try entailment.materializeRdfsContainerMembership(&actual, target);
+        }
+    }
 
-    const entailed = if (case.result) |result_name| result: {
-        var expected = try parseSuiteGraph(allocator, suite_dir, result_name);
-        defer expected.deinit();
-        break :result try simplyEntails(allocator, &actual, &expected);
-    } else false;
+    const entailed = if (expected) |*target|
+        try simplyEntails(allocator, &actual, target)
+    else
+        false;
     return entailed == (case.kind == .positive);
 }
 
