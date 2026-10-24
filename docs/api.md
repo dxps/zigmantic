@@ -107,6 +107,23 @@ Output follows dataset iteration order. The serializer does not sort quads, rela
 blank nodes, or promise byte-identical output for isomorphic datasets built with
 different ordering or blank-node identifiers.
 
+## Indexed store
+
+`store.Store` is an allocator-owned in-memory RDF dataset with its own `TermPool`.
+Callers intern terms through `store.terms` and pass those pool-local identifiers to
+`add`, `remove`, `contains`, and `iterator`. Insertion applies the shared RDF position
+validation and set semantics; it returns false for an already-present quad. Allocation
+failure leaves the logical store contents unchanged.
+
+The store indexes subject, predicate, object, and graph name independently. A bound
+pattern is driven by the shortest available component posting list and then checked
+against all remaining fields. Unbound iteration scans live slots. Both paths return
+quads in insertion order without allocating.
+
+Removal uses tombstones so existing slot and posting-list positions remain stable. A
+removed quad is absent from queries immediately; reinserting it places it at the end of
+the current live iteration order. Any mutation invalidates outstanding store iterators.
+
 ## IRI references
 
 `iri.resolveAlloc(allocator, base, reference)` returns an owned absolute IRI using the

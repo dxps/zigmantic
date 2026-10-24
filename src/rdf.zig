@@ -257,7 +257,7 @@ pub const TriplePattern = struct {
     predicate: ?TermId = null,
     object: ?TermId = null,
 
-    fn matches(self: TriplePattern, triple: Triple) bool {
+    pub fn matches(self: TriplePattern, triple: Triple) bool {
         return (self.subject == null or self.subject.? == triple.subject) and
             (self.predicate == null or self.predicate.? == triple.predicate) and
             (self.object == null or self.object.? == triple.object);
@@ -297,7 +297,7 @@ pub const QuadPattern = struct {
     object: ?TermId = null,
     graph_name: ?GraphName = null,
 
-    fn matches(self: QuadPattern, quad: Quad) bool {
+    pub fn matches(self: QuadPattern, quad: Quad) bool {
         return (self.subject == null or self.subject.? == quad.subject) and
             (self.predicate == null or self.predicate.? == quad.predicate) and
             (self.object == null or self.object.? == quad.object) and

@@ -100,3 +100,20 @@ selections. The lexer, directives, RDF term grammar, lists, collections, and bla
 scope remain single implementations; only statement routing differs. This keeps term
 identifiers in the final owner from the start and avoids copying between temporary
 graphs and datasets.
+
+## Indexed store
+
+The in-memory store owns one term pool and an append-only slot array. Four inverted
+indexes map subject, predicate, object, and encoded graph name to insertion-ordered slot
+lists. An exact-quad hash index supplies set semantics and constant-time membership in
+the usual case.
+
+Deletion marks a slot inactive and removes it from the exact-quad index. Posting lists
+retain stale slot numbers, which avoids renumbering and preserves deterministic order;
+iterators skip inactive slots. Reinsertion receives a new slot at the end. A later
+compaction API may rebuild slots and indexes explicitly, but ordinary removal never
+changes the relative order of live quads.
+
+Insertion updates every index transactionally at the operation level. Allocation
+failure unwinds all posting-list and slot changes before returning, leaving no partially
+indexed live quad.
