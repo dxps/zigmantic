@@ -147,6 +147,17 @@ Expected operation costs, assuming ordinary hash-table behavior, are:
 
 ## Entailment materialization
 
+`entailment.entailsGraph(allocator, premise, conclusion, options)` is the stable
+conclusion-directed entry point for simple, RDF, and RDFS entailment. It leaves both
+graphs unchanged, applies the selected finite closure in an internal materialization,
+matches conclusion blank nodes existentially, and returns owned-allocation errors to the
+caller. `EntailmentOptions` selects the regime and explicitly recognized datatype
+profile.
+
+`entailment.isGraphConsistent` applies the same regime and datatype semantics without a
+conclusion graph. Simple graphs are always consistent. Under RDF and RDFS, an
+inconsistent premise entails every conclusion through `entailsGraph`.
+
 `entailment.Materialization` owns one RDF term pool and an indexed union of asserted and
 inferred triples. `fromGraph` copies an asserted graph into that independent ownership
 scope. `addAsserted` and `addInferred` keep set semantics; when an inferred triple is
@@ -165,6 +176,10 @@ on top of it.
 use container-membership properties and applies entailment pattern `rdfD2`, inferring
 that every predicate occurring in the union is an `rdf:Property`. It returns the number
 of newly inferred triples and is idempotent.
+
+`materializeRdfContainerMembership` adds the target-aware RDF property axioms for the
+otherwise infinite `rdf:_n` family. The public `entailsGraph` composition invokes it for
+plain RDF entailment, including when a membership IRI occurs only in the conclusion.
 
 `materializeRdfsContainerMembership` accepts the requested conclusion graph so the
 otherwise infinite `rdf:_n` axiom family can be instantiated finitely. It discovers

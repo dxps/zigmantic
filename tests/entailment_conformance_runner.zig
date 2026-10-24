@@ -6,7 +6,7 @@ const rdf_io = zigmantic.rdf_io;
 const entailment = zigmantic.entailment;
 
 const Kind = enum { positive, negative };
-const Regime = enum { simple, rdf, rdfs };
+const Regime = entailment.Regime;
 
 const Case = struct {
     id: []const u8,
@@ -15,11 +15,6 @@ const Case = struct {
     kind: Kind,
     regime: Regime,
     datatypes: entailment.DatatypeProfile,
-};
-
-const Mapping = struct {
-    expected: rdf.TermId,
-    actual: rdf.TermId,
 };
 
 pub fn run(comptime config: anytype) !void {
@@ -177,25 +172,14 @@ fn runCase(comptime suite_dir: []const u8, case: Case) !bool {
         null;
     defer if (expected) |*graph| graph.deinit();
 
-    var actual = try entailment.Materialization.fromGraph(allocator, &source);
-    defer actual.deinit();
-
-    if (case.regime != .simple) _ = try entailment.materializeRdfCore(&actual);
-    if (case.regime == .rdfs) {
-        if (expected) |*target| {
-            _ = try entailment.materializeRdfsContainerMembership(&actual, target);
-        }
-        _ = try entailment.materializeRdfsCore(&actual);
-    }
-
-    const consistent = case.regime == .simple or
-        entailment.isDatatypeConsistent(&actual, case.datatypes);
-    const entailed = if (!consistent)
-        true
-    else if (expected) |*target|
-        try simplyEntails(allocator, &actual, target, case.datatypes)
+    const options = entailment.EntailmentOptions{
+        .regime = case.regime,
+        .datatypes = case.datatypes,
+    };
+    const entailed = if (expected) |*target|
+        try entailment.entailsGraph(allocator, &source, target, options)
     else
-        false;
+        !(try entailment.isGraphConsistent(allocator, &source, options));
     return entailed == (case.kind == .positive);
 }
 
@@ -224,160 +208,6 @@ fn parseSuiteGraph(
         return rdf_io.parseTurtle(allocator, input, .{ .base_iri = base });
     }
     return error.InvalidManifest;
-}
-
-fn simplyEntails(
-    allocator: std.mem.Allocator,
-    actual: *const entailment.Materialization,
-    expected: *const rdf.Graph,
-    datatypes: entailment.DatatypeProfile,
-) !bool {
-    var mappings: std.ArrayList(Mapping) = .empty;
-    defer mappings.deinit(allocator);
-    return matchExpected(allocator, actual, expected, 0, &mappings, datatypes);
-}
-
-fn matchExpected(
-    allocator: std.mem.Allocator,
-    actual: *const entailment.Materialization,
-    expected: *const rdf.Graph,
-    expected_index: usize,
-    mappings: *std.ArrayList(Mapping),
-    datatypes: entailment.DatatypeProfile,
-) !bool {
-    if (expected_index == expected.len()) return true;
-    const expected_triple = expected.items()[expected_index];
-    var candidates = actual.iterator(.all);
-    while (candidates.next()) |candidate| {
-        const mapping_count = mappings.items.len;
-        if (try triplesMatch(
-            allocator,
-            actual,
-            candidate,
-            expected,
-            expected_triple,
-            mappings,
-            datatypes,
-        ) and try matchExpected(
-            allocator,
-            actual,
-            expected,
-            expected_index + 1,
-            mappings,
-            datatypes,
-        )) {
-            return true;
-        }
-        mappings.items.len = mapping_count;
-    }
-
-    var literal_sources = actual.iterator(.all);
-    while (literal_sources.next()) |source| {
-        const value = actual.termPoolConst().view(source.object) orelse return false;
-        if (value != .literal) continue;
-        const mapping_count = mappings.items.len;
-        if (try generalizedDatatypeTypeMatches(
-            allocator,
-            actual,
-            source.object,
-            expected,
-            expected_triple,
-            mappings,
-            datatypes,
-        ) and try matchExpected(
-            allocator,
-            actual,
-            expected,
-            expected_index + 1,
-            mappings,
-            datatypes,
-        )) {
-            return true;
-        }
-        mappings.items.len = mapping_count;
-    }
-    return false;
-}
-
-fn generalizedDatatypeTypeMatches(
-    allocator: std.mem.Allocator,
-    actual: *const entailment.Materialization,
-    literal_id: rdf.TermId,
-    expected: *const rdf.Graph,
-    triple: rdf.Triple,
-    mappings: *std.ArrayList(Mapping),
-    datatypes: entailment.DatatypeProfile,
-) !bool {
-    const subject = expected.terms.view(triple.subject) orelse return false;
-    if (subject != .blank_node) return false;
-    const predicate = expected.terms.view(triple.predicate) orelse return false;
-    const predicate_iri = switch (predicate) {
-        .named_node => |iri| iri,
-        else => return false,
-    };
-    if (!std.mem.eql(u8, predicate_iri, rdf.rdf_namespace ++ "type")) return false;
-    const object = expected.terms.view(triple.object) orelse return false;
-    const datatype_iri = switch (object) {
-        .named_node => |iri| iri,
-        else => return false,
-    };
-    const literal = actual.termPoolConst().view(literal_id) orelse return false;
-    if (literal != .literal) return false;
-    if (!(entailment.recognizedLiteralBelongsTo(
-        literal.literal,
-        datatype_iri,
-        datatypes,
-    ) orelse false)) return false;
-    return termsMatch(
-        allocator,
-        actual,
-        literal_id,
-        expected,
-        triple.subject,
-        mappings,
-        datatypes,
-    );
-}
-
-fn triplesMatch(
-    allocator: std.mem.Allocator,
-    actual: *const entailment.Materialization,
-    left: rdf.Triple,
-    expected: *const rdf.Graph,
-    right: rdf.Triple,
-    mappings: *std.ArrayList(Mapping),
-    datatypes: entailment.DatatypeProfile,
-) !bool {
-    if (!try termsMatch(allocator, actual, left.predicate, expected, right.predicate, mappings, datatypes)) return false;
-    if (!try termsMatch(allocator, actual, left.subject, expected, right.subject, mappings, datatypes)) return false;
-    return termsMatch(allocator, actual, left.object, expected, right.object, mappings, datatypes);
-}
-
-fn termsMatch(
-    allocator: std.mem.Allocator,
-    actual: *const entailment.Materialization,
-    actual_id: rdf.TermId,
-    expected: *const rdf.Graph,
-    expected_id: rdf.TermId,
-    mappings: *std.ArrayList(Mapping),
-    datatypes: entailment.DatatypeProfile,
-) !bool {
-    const expected_value = expected.terms.view(expected_id) orelse return false;
-    if (expected_value != .blank_node) {
-        if (try actual.termPoolConst().eqlTerm(actual_id, &expected.terms, expected_id)) return true;
-        const actual_value = actual.termPoolConst().view(actual_id) orelse return false;
-        if (actual_value != .literal or expected_value != .literal) return false;
-        return entailment.recognizedLiteralValuesEqual(
-            actual_value.literal,
-            expected_value.literal,
-            datatypes,
-        ) orelse false;
-    }
-    for (mappings.items) |mapping| {
-        if (mapping.expected == expected_id) return mapping.actual == actual_id;
-    }
-    try mappings.append(allocator, .{ .expected = expected_id, .actual = actual_id });
-    return true;
 }
 
 fn contains(comptime values: []const []const u8, needle: []const u8) bool {

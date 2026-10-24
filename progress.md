@@ -163,8 +163,11 @@ separate packages only after their APIs and release cycles become independently 
   value, including decimal canonicalization and IEEE-754 rounding behavior.
 - Virtual generalized datatype facts now support `rdfD1` existential conclusions
   without admitting literal subjects into ordinary RDF graphs.
+- Public `entailsGraph` and `isGraphConsistent` APIs now compose simple, RDF, and RDFS
+  behavior; the official runner contains no separate reasoning implementation.
+- Plain RDF entailment now includes conclusion-directed `rdf:_n` property axioms.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 85 tests; all 827 integrated syntax/evaluation cases still pass.
+- The local suite has 88 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -182,10 +185,10 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Move conclusion-directed simple/RDF/RDFS entailment checking from the conformance
-   harness into a stable public API that composes the rule layers.
-2. Complete XMLLiteral validation with a standards-compliant XML parser.
-3. Audit generalized RDF intermediate requirements and the normative semantics beyond
+1. Complete XMLLiteral validation with a standards-compliant XML parser.
+2. Add allocation-failure and adversarial graph coverage around the public entailment
+   APIs.
+3. Audit generalized RDF intermediate requirements and normative semantics beyond
    the official suite before declaring milestone 6 complete.
 
 ## Session log
@@ -638,3 +641,17 @@ separate packages only after their APIs and release cycles become independently 
 - Removed the final expected failure and passed all 48 active official RDF 1.1
   model-theory cases with no exclusions.
 - Retained all 85 local tests and all 827 RDF syntax/evaluation cases.
+
+### 2026-10-24 — Public graph entailment API
+
+- Added public `Regime`, `EntailmentOptions`, `entailsGraph`, and `isGraphConsistent`
+  interfaces for conclusion-directed simple, RDF, and RDFS reasoning.
+- Moved existential blank-node matching, recognized value equality, inconsistency
+  explosion, and virtual `rdfD1` facts from the conformance runner into the library.
+- Added target-aware RDF container property axioms for conclusions mentioning
+  `rdf:_n`, complementing the existing RDFS container layer.
+- Reduced the W3C runner to manifest and fixture plumbing with no duplicate reasoning
+  implementation.
+- Added direct public API tests for simple existential matching, target-only RDF
+  container axioms, and `rdfD1`.
+- Passed all 48 active model-theory cases, 827 syntax/evaluation cases, and 88 local tests.

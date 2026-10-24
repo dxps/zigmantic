@@ -60,3 +60,7 @@ literals are compared by value, and `rdfD1` generalized literal-type consequence
 matched virtually without weakening the ordinary RDF graph model. Three commented-out,
 rescinded or duplicate entries remain in the upstream manifest text but are correctly
 excluded from execution.
+
+The runner delegates entailment and consistency decisions to the public library API; it
+contains only manifest parsing, fixture loading, expected-result interpretation, and the
+executable expected-failure guard.

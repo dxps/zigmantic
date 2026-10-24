@@ -10,6 +10,22 @@ const TripleKey = struct {
     object: u32,
 };
 
+const Mapping = struct {
+    expected: rdf.TermId,
+    actual: rdf.TermId,
+};
+
+pub const Regime = enum {
+    simple,
+    rdf,
+    rdfs,
+};
+
+pub const EntailmentOptions = struct {
+    regime: Regime = .simple,
+    datatypes: DatatypeProfile = .{},
+};
+
 pub const Origin = enum {
     asserted,
     inferred,
@@ -111,6 +127,66 @@ pub const Materialization = struct {
     }
 };
 
+/// Determines whether `premise` entails `conclusion` under the selected regime.
+/// The input graphs remain unchanged. Conclusion blank nodes are existential, and
+/// recognized datatype values participate in equality and `rdfD1` matching.
+pub fn entailsGraph(
+    allocator: std.mem.Allocator,
+    premise: *const rdf.Graph,
+    conclusion: *const rdf.Graph,
+    options: EntailmentOptions,
+) store_mod.Error!bool {
+    var materialization = try Materialization.fromGraph(allocator, premise);
+    defer materialization.deinit();
+    try materializeForRegime(&materialization, conclusion, options.regime);
+    if (options.regime != .simple and
+        !isDatatypeConsistent(&materialization, options.datatypes))
+    {
+        return true;
+    }
+    return materializationEntails(
+        allocator,
+        &materialization,
+        conclusion,
+        options.datatypes,
+    );
+}
+
+/// Reports whether `premise` is satisfiable under the selected regime and
+/// recognized datatype profile. Every graph is consistent under simple entailment.
+pub fn isGraphConsistent(
+    allocator: std.mem.Allocator,
+    premise: *const rdf.Graph,
+    options: EntailmentOptions,
+) store_mod.Error!bool {
+    if (options.regime == .simple) return true;
+    var materialization = try Materialization.fromGraph(allocator, premise);
+    defer materialization.deinit();
+    var empty_target = rdf.Graph.init(allocator);
+    defer empty_target.deinit();
+    try materializeForRegime(&materialization, &empty_target, options.regime);
+    return isDatatypeConsistent(&materialization, options.datatypes);
+}
+
+fn materializeForRegime(
+    materialization: *Materialization,
+    conclusion: *const rdf.Graph,
+    regime: Regime,
+) store_mod.Error!void {
+    switch (regime) {
+        .simple => {},
+        .rdf => {
+            _ = try materializeRdfCore(materialization);
+            _ = try materializeRdfContainerMembership(materialization, conclusion);
+        },
+        .rdfs => {
+            _ = try materializeRdfCore(materialization);
+            _ = try materializeRdfsContainerMembership(materialization, conclusion);
+            _ = try materializeRdfsCore(materialization);
+        },
+    }
+}
+
 /// Adds the eight fixed non-container RDF axiomatic triples and applies RDF 1.1
 /// entailment pattern `rdfD2`, which types every predicate occurring in the union as
 /// `rdf:Property`. The update is atomic and idempotent. Container-membership axioms and
@@ -173,6 +249,35 @@ pub fn materializeRdfCore(materialization: *Materialization) store_mod.Error!Mat
     return .{ .inferred = inferred };
 }
 
+/// Adds the RDF property axiom for every canonical `rdf:_n` IRI occurring in
+/// the materialization or requested conclusion. If neither graph names one,
+/// `rdf:_1` is used as the finite closure witness. The update is atomic and
+/// idempotent.
+pub fn materializeRdfContainerMembership(
+    materialization: *Materialization,
+    target: *const rdf.Graph,
+) store_mod.Error!MaterializeResult {
+    var membership_properties: std.ArrayList(rdf.TermId) = .empty;
+    defer membership_properties.deinit(materialization.allocator);
+    try collectMembershipVocabulary(materialization, target, &membership_properties);
+
+    const pool = materialization.termPool();
+    const rdf_type = try pool.internNamedNode(rdf.rdf_namespace ++ "type");
+    const rdf_property = try pool.internNamedNode(rdf.rdf_namespace ++ "Property");
+    var transaction = try materialization.storage.beginTransaction();
+    defer transaction.deinit();
+    var inferred: usize = 0;
+    for (membership_properties.items) |property| {
+        if (try transaction.add(toQuad(.{
+            .subject = property,
+            .predicate = rdf_type,
+            .object = rdf_property,
+        }))) inferred += 1;
+    }
+    try transaction.commit();
+    return .{ .inferred = inferred };
+}
+
 /// Adds the RDF and RDFS axioms for every `rdf:_n` container-membership IRI
 /// occurring in either the materialization or the requested conclusion graph.
 /// It also applies the corresponding `rdfs12` and `rdfs7` consequences. When
@@ -186,63 +291,11 @@ pub fn materializeRdfsContainerMembership(
     var membership_properties: std.ArrayList(rdf.TermId) = .empty;
     defer membership_properties.deinit(materialization.allocator);
 
-    var triples = materialization.iterator(.all);
-    while (triples.next()) |triple| {
-        try collectMembershipTerm(
-            materialization.termPool(),
-            materialization.termPoolConst(),
-            triple.subject,
-            &membership_properties,
-            materialization.allocator,
-        );
-        try collectMembershipTerm(
-            materialization.termPool(),
-            materialization.termPoolConst(),
-            triple.predicate,
-            &membership_properties,
-            materialization.allocator,
-        );
-        try collectMembershipTerm(
-            materialization.termPool(),
-            materialization.termPoolConst(),
-            triple.object,
-            &membership_properties,
-            materialization.allocator,
-        );
-    }
-    for (target.items()) |triple| {
-        try collectMembershipTerm(
-            materialization.termPool(),
-            &target.terms,
-            triple.subject,
-            &membership_properties,
-            materialization.allocator,
-        );
-        try collectMembershipTerm(
-            materialization.termPool(),
-            &target.terms,
-            triple.predicate,
-            &membership_properties,
-            materialization.allocator,
-        );
-        try collectMembershipTerm(
-            materialization.termPool(),
-            &target.terms,
-            triple.object,
-            &membership_properties,
-            materialization.allocator,
-        );
-    }
-    if (membership_properties.items.len == 0) {
-        try membership_properties.append(
-            materialization.allocator,
-            try materialization.termPool().internNamedNode(rdf.rdf_namespace ++ "_1"),
-        );
-    }
+    try collectMembershipVocabulary(materialization, target, &membership_properties);
 
     var membership_assertions: std.ArrayList(rdf.Triple) = .empty;
     defer membership_assertions.deinit(materialization.allocator);
-    triples = materialization.iterator(.all);
+    var triples = materialization.iterator(.all);
     while (triples.next()) |triple| {
         if (containsTerm(membership_properties.items, triple.predicate)) {
             try membership_assertions.append(materialization.allocator, triple);
@@ -905,6 +958,214 @@ fn isSupportedXmlLiteralLexical(lexical: []const u8) bool {
     return true;
 }
 
+fn materializationEntails(
+    allocator: std.mem.Allocator,
+    actual: *const Materialization,
+    expected: *const rdf.Graph,
+    datatypes: DatatypeProfile,
+) store_mod.Error!bool {
+    var mappings: std.ArrayList(Mapping) = .empty;
+    defer mappings.deinit(allocator);
+    return matchExpected(allocator, actual, expected, 0, &mappings, datatypes);
+}
+
+fn matchExpected(
+    allocator: std.mem.Allocator,
+    actual: *const Materialization,
+    expected: *const rdf.Graph,
+    expected_index: usize,
+    mappings: *std.ArrayList(Mapping),
+    datatypes: DatatypeProfile,
+) store_mod.Error!bool {
+    if (expected_index == expected.len()) return true;
+    const expected_triple = expected.items()[expected_index];
+    var candidates = actual.iterator(.all);
+    while (candidates.next()) |candidate| {
+        const mapping_count = mappings.items.len;
+        if (try triplesMatch(
+            allocator,
+            actual,
+            candidate,
+            expected,
+            expected_triple,
+            mappings,
+            datatypes,
+        ) and try matchExpected(
+            allocator,
+            actual,
+            expected,
+            expected_index + 1,
+            mappings,
+            datatypes,
+        )) return true;
+        mappings.items.len = mapping_count;
+    }
+
+    var literal_sources = actual.iterator(.all);
+    while (literal_sources.next()) |source| {
+        const value = actual.termPoolConst().view(source.object) orelse return error.UnknownTerm;
+        if (value != .literal) continue;
+        const mapping_count = mappings.items.len;
+        if (try generalizedDatatypeTypeMatches(
+            allocator,
+            actual,
+            source.object,
+            expected,
+            expected_triple,
+            mappings,
+            datatypes,
+        ) and try matchExpected(
+            allocator,
+            actual,
+            expected,
+            expected_index + 1,
+            mappings,
+            datatypes,
+        )) return true;
+        mappings.items.len = mapping_count;
+    }
+    return false;
+}
+
+fn generalizedDatatypeTypeMatches(
+    allocator: std.mem.Allocator,
+    actual: *const Materialization,
+    literal_id: rdf.TermId,
+    expected: *const rdf.Graph,
+    triple: rdf.Triple,
+    mappings: *std.ArrayList(Mapping),
+    datatypes: DatatypeProfile,
+) store_mod.Error!bool {
+    const subject = expected.terms.view(triple.subject) orelse return error.UnknownTerm;
+    if (subject != .blank_node) return false;
+    const predicate = expected.terms.view(triple.predicate) orelse return error.UnknownTerm;
+    const predicate_iri = switch (predicate) {
+        .named_node => |iri| iri,
+        else => return false,
+    };
+    if (!std.mem.eql(u8, predicate_iri, rdf.rdf_namespace ++ "type")) return false;
+    const object = expected.terms.view(triple.object) orelse return error.UnknownTerm;
+    const datatype_iri = switch (object) {
+        .named_node => |iri| iri,
+        else => return false,
+    };
+    const literal = actual.termPoolConst().view(literal_id) orelse return error.UnknownTerm;
+    if (literal != .literal) return false;
+    if (!(recognizedLiteralBelongsTo(literal.literal, datatype_iri, datatypes) orelse false)) {
+        return false;
+    }
+    return termsMatch(
+        allocator,
+        actual,
+        literal_id,
+        expected,
+        triple.subject,
+        mappings,
+        datatypes,
+    );
+}
+
+fn triplesMatch(
+    allocator: std.mem.Allocator,
+    actual: *const Materialization,
+    left: rdf.Triple,
+    expected: *const rdf.Graph,
+    right: rdf.Triple,
+    mappings: *std.ArrayList(Mapping),
+    datatypes: DatatypeProfile,
+) store_mod.Error!bool {
+    if (!try termsMatch(allocator, actual, left.predicate, expected, right.predicate, mappings, datatypes)) return false;
+    if (!try termsMatch(allocator, actual, left.subject, expected, right.subject, mappings, datatypes)) return false;
+    return termsMatch(allocator, actual, left.object, expected, right.object, mappings, datatypes);
+}
+
+fn termsMatch(
+    allocator: std.mem.Allocator,
+    actual: *const Materialization,
+    actual_id: rdf.TermId,
+    expected: *const rdf.Graph,
+    expected_id: rdf.TermId,
+    mappings: *std.ArrayList(Mapping),
+    datatypes: DatatypeProfile,
+) store_mod.Error!bool {
+    const expected_value = expected.terms.view(expected_id) orelse return error.UnknownTerm;
+    if (expected_value != .blank_node) {
+        if (try actual.termPoolConst().eqlTerm(actual_id, &expected.terms, expected_id)) return true;
+        const actual_value = actual.termPoolConst().view(actual_id) orelse return error.UnknownTerm;
+        if (actual_value != .literal or expected_value != .literal) return false;
+        return recognizedLiteralValuesEqual(
+            actual_value.literal,
+            expected_value.literal,
+            datatypes,
+        ) orelse false;
+    }
+    for (mappings.items) |mapping| {
+        if (mapping.expected == expected_id) return mapping.actual == actual_id;
+    }
+    try mappings.append(allocator, .{ .expected = expected_id, .actual = actual_id });
+    return true;
+}
+
+fn collectMembershipVocabulary(
+    materialization: *Materialization,
+    target: *const rdf.Graph,
+    properties: *std.ArrayList(rdf.TermId),
+) store_mod.Error!void {
+    var triples = materialization.iterator(.all);
+    while (triples.next()) |triple| {
+        try collectMembershipTerm(
+            materialization.termPool(),
+            materialization.termPoolConst(),
+            triple.subject,
+            properties,
+            materialization.allocator,
+        );
+        try collectMembershipTerm(
+            materialization.termPool(),
+            materialization.termPoolConst(),
+            triple.predicate,
+            properties,
+            materialization.allocator,
+        );
+        try collectMembershipTerm(
+            materialization.termPool(),
+            materialization.termPoolConst(),
+            triple.object,
+            properties,
+            materialization.allocator,
+        );
+    }
+    for (target.items()) |triple| {
+        try collectMembershipTerm(
+            materialization.termPool(),
+            &target.terms,
+            triple.subject,
+            properties,
+            materialization.allocator,
+        );
+        try collectMembershipTerm(
+            materialization.termPool(),
+            &target.terms,
+            triple.predicate,
+            properties,
+            materialization.allocator,
+        );
+        try collectMembershipTerm(
+            materialization.termPool(),
+            &target.terms,
+            triple.object,
+            properties,
+            materialization.allocator,
+        );
+    }
+    if (properties.items.len == 0) {
+        try properties.append(
+            materialization.allocator,
+            try materialization.termPool().internNamedNode(rdf.rdf_namespace ++ "_1"),
+        );
+    }
+}
+
 fn collectMembershipTerm(
     destination: *rdf.TermPool,
     source: *const rdf.TermPool,
@@ -1440,6 +1701,100 @@ test "recognized IEEE values compare after datatype rounding" {
     try std.testing.expect(!recognizedLiteralValuesEqual(positive_zero, negative_zero, float_profile).?);
     try std.testing.expect(recognizedLiteralValuesEqual(infinity, explicit_infinity, float_profile).?);
     try std.testing.expect(recognizedLiteralValuesEqual(nan, nan, float_profile).?);
+}
+
+test "public simple entailment maps conclusion blank nodes existentially" {
+    var premise = rdf.Graph.init(std.testing.allocator);
+    defer premise.deinit();
+    const premise_subject = try premise.terms.internNamedNode("https://example.com/subject");
+    const premise_predicate = try premise.terms.internNamedNode("https://example.com/predicate");
+    const premise_object = try premise.terms.internNamedNode("https://example.com/object");
+    _ = try premise.add(.{
+        .subject = premise_subject,
+        .predicate = premise_predicate,
+        .object = premise_object,
+    });
+
+    var conclusion = rdf.Graph.init(std.testing.allocator);
+    defer conclusion.deinit();
+    const conclusion_subject = try conclusion.terms.internBlankNode("value");
+    const conclusion_predicate = try conclusion.terms.internNamedNode("https://example.com/predicate");
+    const conclusion_object = try conclusion.terms.internNamedNode("https://example.com/object");
+    _ = try conclusion.add(.{
+        .subject = conclusion_subject,
+        .predicate = conclusion_predicate,
+        .object = conclusion_object,
+    });
+
+    try std.testing.expect(try entailsGraph(
+        std.testing.allocator,
+        &premise,
+        &conclusion,
+        .{ .regime = .simple },
+    ));
+}
+
+test "public RDF entailment adds target-only container axioms" {
+    var premise = rdf.Graph.init(std.testing.allocator);
+    defer premise.deinit();
+    var conclusion = rdf.Graph.init(std.testing.allocator);
+    defer conclusion.deinit();
+    const membership = try conclusion.terms.internNamedNode(rdf.rdf_namespace ++ "_7");
+    const rdf_type = try conclusion.terms.internNamedNode(rdf.rdf_namespace ++ "type");
+    const rdf_property = try conclusion.terms.internNamedNode(rdf.rdf_namespace ++ "Property");
+    _ = try conclusion.add(.{
+        .subject = membership,
+        .predicate = rdf_type,
+        .object = rdf_property,
+    });
+
+    try std.testing.expect(try entailsGraph(
+        std.testing.allocator,
+        &premise,
+        &conclusion,
+        .{ .regime = .rdf },
+    ));
+}
+
+test "public RDF entailment exposes rdfD1 through an existential conclusion" {
+    var premise = rdf.Graph.init(std.testing.allocator);
+    defer premise.deinit();
+    const premise_subject = try premise.terms.internNamedNode("https://example.com/subject");
+    const premise_predicate = try premise.terms.internNamedNode("https://example.com/predicate");
+    const literal = try premise.terms.internTypedLiteral("42", rdf.xsd_integer);
+    _ = try premise.add(.{
+        .subject = premise_subject,
+        .predicate = premise_predicate,
+        .object = literal,
+    });
+
+    var conclusion = rdf.Graph.init(std.testing.allocator);
+    defer conclusion.deinit();
+    const conclusion_subject = try conclusion.terms.internNamedNode("https://example.com/subject");
+    const conclusion_predicate = try conclusion.terms.internNamedNode("https://example.com/predicate");
+    const value = try conclusion.terms.internBlankNode("value");
+    const rdf_type = try conclusion.terms.internNamedNode(rdf.rdf_namespace ++ "type");
+    const xsd_integer = try conclusion.terms.internNamedNode(rdf.xsd_integer);
+    _ = try conclusion.add(.{
+        .subject = conclusion_subject,
+        .predicate = conclusion_predicate,
+        .object = value,
+    });
+    _ = try conclusion.add(.{
+        .subject = value,
+        .predicate = rdf_type,
+        .object = xsd_integer,
+    });
+
+    try std.testing.expect(try entailsGraph(
+        std.testing.allocator,
+        &premise,
+        &conclusion,
+        .{
+            .regime = .rdf,
+            .datatypes = .{ .xsd_integer = true },
+        },
+    ));
 }
 
 fn exerciseMaterializationAllocations(allocator: std.mem.Allocator) !void {

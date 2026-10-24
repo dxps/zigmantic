@@ -132,6 +132,11 @@ so all `TermId` values and term views remain valid across compaction.
 
 ## Entailment boundary
 
+The public `entailsGraph` operation composes conclusion-directed closure and existential
+matching for simple, RDF, and RDFS regimes. `isGraphConsistent` exposes the corresponding
+satisfiability check. Both create internal state and leave their premise and conclusion
+graphs unchanged.
+
 Forward inference uses an explicit `Materialization` rather than modifying an asserted
 `Graph`. The materialization copies source terms into one owned pool, stores the union
 in the indexed store's default graph, and maintains a separate exact set for asserted
@@ -179,8 +184,13 @@ comparison, preserving their specified rounding, infinities, NaN equality, and s
 zero distinction. Unknown datatype IRIs fall back to ordinary RDF term equality rather
 than acquiring unsupported semantics.
 
-The model-theory entailment matcher represents `rdfD1` consequences virtually. When a
+The library entailment matcher represents `rdfD1` consequences virtually. When a
 conclusion blank node is mapped to a recognized literal value, a matching
 `rdf:type datatype` fact is available to the matcher without being inserted into the
 materialization. This preserves completeness for the tested existential conclusion
 while keeping literal subjects out of `Graph`, `Store`, and their public iterators.
+
+Plain RDF composition also instantiates target-aware `rdf:_n rdf:type rdf:Property`
+axioms. RDFS composition uses the richer container layer before applying its general
+fixed-point rules. The W3C runner now supplies only parsed graphs and manifest options;
+it contains no independent entailment algorithm.
