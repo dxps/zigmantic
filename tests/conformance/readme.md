@@ -54,7 +54,8 @@ any regression fails the build.
 The model-theory runner executes all 48 active positive and negative entailment entries across
 the simple, RDF, and RDFS regimes. Graph-valued conclusions use existential blank-node
 matching. A `false` result represents an inconsistent premise, which the current engine
-now detects for mandatory RDF datatypes. The executable baseline has 34 passing cases
-and 14 exact expected failures; regressions and newly passing cases both fail the build
-until reviewed. Three commented-out, rescinded or duplicate entries remain in the
-upstream manifest text but are correctly excluded from execution.
+detects for mandatory RDF datatypes and supported explicitly recognized datatypes. The
+executable baseline has 40 passing cases and eight exact expected failures; regressions
+and newly passing cases both fail the build until reviewed. Three commented-out,
+rescinded or duplicate entries remain in the upstream manifest text but are correctly
+excluded from execution.

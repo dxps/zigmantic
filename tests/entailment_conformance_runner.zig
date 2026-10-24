@@ -14,6 +14,7 @@ const Case = struct {
     result: ?[]const u8,
     kind: Kind,
     regime: Regime,
+    datatypes: entailment.DatatypeProfile,
 };
 
 const Mapping = struct {
@@ -103,7 +104,36 @@ fn readCase(manifest: []const u8, definitions_start: usize, id: []const u8) !Cas
         .result = propertyReference(block, "mf:result"),
         .kind = kind,
         .regime = regime,
+        .datatypes = .{
+            .rdf_xml_literal = propertyListContains(
+                block,
+                "mf:recognizedDatatypes",
+                "rdf:XMLLiteral",
+            ),
+            .xsd_integer = propertyListContains(
+                block,
+                "mf:recognizedDatatypes",
+                "xsd:integer",
+            ),
+            .xsd_int = propertyListContains(
+                block,
+                "mf:recognizedDatatypes",
+                "xsd:int",
+            ),
+        },
     };
+}
+
+fn propertyListContains(block: []const u8, property: []const u8, wanted: []const u8) bool {
+    const property_at = std.mem.indexOf(u8, block, property) orelse return false;
+    const open = std.mem.indexOfScalarPos(u8, block, property_at + property.len, '(') orelse
+        return false;
+    const close = std.mem.indexOfScalarPos(u8, block, open + 1, ')') orelse return false;
+    var values = std.mem.tokenizeAny(u8, block[open + 1 .. close], " \t\r\n");
+    while (values.next()) |value| {
+        if (std.mem.eql(u8, value, wanted)) return true;
+    }
+    return false;
 }
 
 fn propertyReference(block: []const u8, property: []const u8) ?[]const u8 {
@@ -144,7 +174,7 @@ fn runCase(comptime suite_dir: []const u8, case: Case) !bool {
     }
 
     const consistent = case.regime == .simple or
-        entailment.isMandatoryDatatypeConsistent(&actual);
+        entailment.isDatatypeConsistent(&actual, case.datatypes);
     const entailed = if (!consistent)
         true
     else if (expected) |*target|

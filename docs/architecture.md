@@ -167,4 +167,7 @@ Mandatory datatype consistency is a read-only check over the materialized union.
 recognizes only `xsd:string` and `rdf:langString`, whose value spaces are fixed and
 disjoint, and evaluates applicable RDFS range constraints directly so it does not need
 illegal generalized triples with literal subjects. Optional XSD and RDF datatype IRIs
-are not treated as recognized until an explicit datatype layer supports them.
+are not treated as recognized until enabled in a `DatatypeProfile`. The initial optional
+layer supports arbitrary-size `xsd:integer` lexical forms, bounded `xsd:int` values, and
+safe detection of incomplete `rdf:XMLLiteral` markup. XMLLiteral validation remains
+deliberately partial until a complete XML parser is available.

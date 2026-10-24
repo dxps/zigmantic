@@ -157,9 +157,11 @@ separate packages only after their APIs and release cycles become independently 
   a transactional fixed point for ordinary RDF triples.
 - Mandatory `xsd:string` and `rdf:langString` consistency detects malformed language
   strings and disjoint RDFS range constraints without recognizing optional datatypes.
-- The current semantic baseline passes 34 cases and tracks 14 failures covering optional
-  datatype interpretation, value equality, and inconsistency behavior.
-- The local suite has 79 tests; all 827 integrated syntax/evaluation cases still pass.
+- Manifest-declared profiles now enable `xsd:integer`, `xsd:int`, and initial
+  `rdf:XMLLiteral` lexical, value-space, and range consistency checks.
+- The current semantic baseline passes 40 cases and tracks eight failures covering
+  datatype value equivalence and `rdfD1` entailment.
+- The local suite has 83 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -170,17 +172,17 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 5 — indexed in-memory quad store: complete.
 - Milestone 6 — RDF/RDFS semantics and entailment: in progress; the materialization
   boundary, RDF core, container membership, and general RDFS rules are implemented;
-  mandatory datatype consistency is implemented, while optional datatype semantics
-  remain.
+  mandatory and initial recognized-datatype consistency are implemented, while value
+  equivalence and generalized datatype entailment remain.
 - Milestones 7–14: not started.
 
 ## Next actions
 
-1. Add lexical validation and inconsistency detection for explicitly recognized
-   `xsd:integer`, `xsd:int`, and `rdf:XMLLiteral` datatypes.
-2. Add value equality for integer/decimal and IEEE float/double datatypes incrementally against
-   the exact failing cases.
-3. Add generalized RDF intermediate support where required for complete closure, then
+1. Add value equality for `xsd:integer`/`xsd:decimal` and IEEE float/double datatypes
+   incrementally against the exact failing cases.
+2. Implement `rdfD1` datatype entailment without exposing illegal literal-subject
+   triples through the ordinary RDF graph API.
+3. Add generalized RDF intermediate support where still required for complete closure, then
    audit RDF/RDFS conformance and remove every newly passing baseline case.
 
 ## Session log
@@ -594,3 +596,17 @@ separate packages only after their APIs and release cycles become independently 
   official baseline at 34/48 active cases with 14 exact failures.
 - Added three focused consistency tests, bringing the local suite to 79 tests while all
   827 syntax/evaluation cases continue to pass.
+
+### 2026-10-24 — Recognized integer and XML literal consistency
+
+- Added manifest-driven datatype profiles so optional datatype semantics apply only
+  when `mf:recognizedDatatypes` explicitly enables them.
+- Implemented arbitrary-size `xsd:integer` lexical validation and exact signed 32-bit
+  bounds for `xsd:int`.
+- Added integer subtype membership and disjoint value-space checks for RDFS ranges.
+- Added conservative `rdf:XMLLiteral` validation that detects incomplete and impossible
+  markup while leaving full XML parsing for a later layer.
+- Cleared six inconsistency cases, raising the official model-theory baseline from
+  34/48 to 40/48 with eight exact failures remaining.
+- Added opt-in, lexical-boundary, subtype-range, and XML-literal tests, bringing the
+  local suite to 83 tests while retaining all 827 syntax/evaluation passes.

@@ -183,12 +183,14 @@ only ordinary RDF triples: generalized intermediate triples requiring literal su
 or non-IRI predicates are not represented by the current RDF data model. Datatype value
 interpretation and inconsistency detection remain separate layers.
 
-`isMandatoryDatatypeConsistent` checks the datatype semantics required by every RDF
-interpretation. It rejects `rdf:langString` literals without a language tag and detects
-incompatible RDFS range constraints between the disjoint `xsd:string` and
-`rdf:langString` value spaces. It deliberately does not interpret optional datatype
-IRIs; support for those is added through a separate recognized-datatype layer rather
-than silently assuming universal recognition.
+`DatatypeProfile` explicitly selects supported optional datatype IRIs. The mandatory
+`xsd:string` and `rdf:langString` datatypes are always active;
+`isMandatoryDatatypeConsistent` is the empty-profile convenience call.
+`isDatatypeConsistent` additionally validates enabled `xsd:integer` and `xsd:int`
+lexical spaces and bounds, performs their value-space membership checks, and detects
+incompatible RDFS ranges. Initial `rdf:XMLLiteral` support safely detects incomplete or
+structurally impossible markup but is not yet a complete XML 1.0 parser. Optional
+datatypes are never silently treated as recognized.
 
 ## IRI references
 

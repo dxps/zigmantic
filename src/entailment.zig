@@ -584,11 +584,27 @@ fn isRdfPredicate(pool: *const rdf.TermPool, term: rdf.TermId) bool {
     };
 }
 
-/// Reports consistency for the two datatype IRIs that every RDF interpretation
-/// must recognize: `xsd:string` and `rdf:langString`. This checks literal lexical
-/// validity and RDFS range constraints whose objects have values fixed by those
-/// datatypes. Optional datatype IRIs are intentionally not interpreted here.
-pub fn isMandatoryDatatypeConsistent(materialization: *const Materialization) bool {
+pub const DatatypeProfile = struct {
+    rdf_xml_literal: bool = false,
+    xsd_integer: bool = false,
+    xsd_int: bool = false,
+};
+
+const DatatypeKind = enum {
+    rdf_lang_string,
+    rdf_xml_literal,
+    xsd_string,
+    xsd_integer,
+    xsd_int,
+};
+
+/// Reports consistency for the mandatory RDF datatypes and the optional datatype
+/// IRIs enabled by `profile`. It validates supported lexical forms and detects
+/// incompatible RDFS range constraints over known datatype value spaces.
+pub fn isDatatypeConsistent(
+    materialization: *const Materialization,
+    profile: DatatypeProfile,
+) bool {
     const pool = materialization.termPoolConst();
     var facts = materialization.iterator(.all);
     while (facts.next()) |fact| {
@@ -597,7 +613,7 @@ pub fn isMandatoryDatatypeConsistent(materialization: *const Materialization) bo
             .literal => |value| value,
             else => continue,
         };
-        if (!isMandatoryLiteralWellTyped(literal)) return false;
+        if (!isLiteralWellTyped(literal, profile)) return false;
 
         var constraints = materialization.iterator(.all);
         while (constraints.next()) |constraint| {
@@ -616,7 +632,7 @@ pub fn isMandatoryDatatypeConsistent(materialization: *const Materialization) bo
                 .named_node => |iri| iri,
                 else => continue,
             };
-            if (mandatoryDatatypeMembership(literal, range_iri)) |belongs| {
+            if (datatypeMembership(literal, range_iri, profile)) |belongs| {
                 if (!belongs) return false;
             }
         }
@@ -624,25 +640,97 @@ pub fn isMandatoryDatatypeConsistent(materialization: *const Materialization) bo
     return true;
 }
 
-fn isMandatoryLiteralWellTyped(literal: rdf.LiteralView) bool {
-    if (std.mem.eql(u8, literal.datatype, rdf.xsd_string)) return literal.language == null;
-    if (std.mem.eql(u8, literal.datatype, rdf.rdf_lang_string)) return literal.language != null;
+pub fn isMandatoryDatatypeConsistent(materialization: *const Materialization) bool {
+    return isDatatypeConsistent(materialization, .{});
+}
+
+fn isLiteralWellTyped(literal: rdf.LiteralView, profile: DatatypeProfile) bool {
+    const kind = datatypeKind(literal.datatype, profile) orelse return true;
+    return switch (kind) {
+        .xsd_string => literal.language == null,
+        .rdf_lang_string => literal.language != null,
+        .xsd_integer => isIntegerLexical(literal.lexical_form),
+        .xsd_int => isIntLexical(literal.lexical_form),
+        .rdf_xml_literal => isSupportedXmlLiteralLexical(literal.lexical_form),
+    };
+}
+
+fn datatypeMembership(
+    literal: rdf.LiteralView,
+    datatype: []const u8,
+    profile: DatatypeProfile,
+) ?bool {
+    const target = datatypeKind(datatype, profile) orelse return null;
+    const source = datatypeKind(literal.datatype, profile) orelse return null;
+    if (!isLiteralWellTyped(literal, profile)) return false;
+    return switch (source) {
+        .xsd_string => target == .xsd_string and literal.language == null,
+        .rdf_lang_string => target == .rdf_lang_string and literal.language != null,
+        .rdf_xml_literal => target == .rdf_xml_literal,
+        .xsd_integer => switch (target) {
+            .xsd_integer => true,
+            .xsd_int => integerFitsInt(literal.lexical_form),
+            else => false,
+        },
+        .xsd_int => target == .xsd_int or target == .xsd_integer,
+    };
+}
+
+fn datatypeKind(iri: []const u8, profile: DatatypeProfile) ?DatatypeKind {
+    if (std.mem.eql(u8, iri, rdf.xsd_string)) return .xsd_string;
+    if (std.mem.eql(u8, iri, rdf.rdf_lang_string)) return .rdf_lang_string;
+    if (profile.rdf_xml_literal and std.mem.eql(u8, iri, rdf.rdf_xml_literal)) {
+        return .rdf_xml_literal;
+    }
+    if (profile.xsd_integer and std.mem.eql(u8, iri, rdf.xsd_integer)) return .xsd_integer;
+    if (profile.xsd_int and std.mem.eql(u8, iri, rdf.xsd_int)) return .xsd_int;
+    return null;
+}
+
+fn isIntegerLexical(lexical: []const u8) bool {
+    if (lexical.len == 0) return false;
+    var index: usize = 0;
+    if (lexical[0] == '+' or lexical[0] == '-') index = 1;
+    if (index == lexical.len) return false;
+    for (lexical[index..]) |byte| {
+        if (!std.ascii.isDigit(byte)) return false;
+    }
     return true;
 }
 
-fn mandatoryDatatypeMembership(literal: rdf.LiteralView, datatype: []const u8) ?bool {
-    if (!std.mem.eql(u8, datatype, rdf.xsd_string) and
-        !std.mem.eql(u8, datatype, rdf.rdf_lang_string))
-    {
-        return null;
+fn isIntLexical(lexical: []const u8) bool {
+    if (!isIntegerLexical(lexical)) return false;
+    _ = std.fmt.parseInt(i32, lexical, 10) catch return false;
+    return true;
+}
+
+fn integerFitsInt(lexical: []const u8) bool {
+    return isIntLexical(lexical);
+}
+
+fn isSupportedXmlLiteralLexical(lexical: []const u8) bool {
+    var index: usize = 0;
+    while (index < lexical.len) {
+        if (lexical[index] == '<') {
+            if (index + 1 == lexical.len) return false;
+            const next = lexical[index + 1];
+            if (!(next == '/' or next == '?' or next == '!' or next == '_' or
+                std.ascii.isAlphabetic(next) or next >= 0x80)) return false;
+            const close = std.mem.indexOfScalarPos(u8, lexical, index + 2, '>') orelse
+                return false;
+            index = close + 1;
+            continue;
+        }
+        if (lexical[index] == '&') {
+            const close = std.mem.indexOfScalarPos(u8, lexical, index + 1, ';') orelse
+                return false;
+            if (close == index + 1) return false;
+            index = close + 1;
+            continue;
+        }
+        index += 1;
     }
-    if (std.mem.eql(u8, literal.datatype, rdf.xsd_string)) {
-        return std.mem.eql(u8, datatype, rdf.xsd_string) and literal.language == null;
-    }
-    if (std.mem.eql(u8, literal.datatype, rdf.rdf_lang_string)) {
-        return std.mem.eql(u8, datatype, rdf.rdf_lang_string) and literal.language != null;
-    }
-    return null;
+    return true;
 }
 
 fn collectMembershipTerm(
@@ -1041,6 +1129,80 @@ test "rdf:langString without a language tag is inconsistent" {
     });
 
     try std.testing.expect(!isMandatoryDatatypeConsistent(&materialization));
+}
+
+test "optional integer datatypes validate only when explicitly recognized" {
+    var materialization = Materialization.init(std.testing.allocator);
+    defer materialization.deinit();
+    const pool = materialization.termPool();
+    const subject = try pool.internNamedNode("https://example.com/subject");
+    const predicate = try pool.internNamedNode("https://example.com/predicate");
+    const invalid = try pool.internTypedLiteral("not-an-integer", rdf.xsd_integer);
+    _ = try materialization.addAsserted(.{
+        .subject = subject,
+        .predicate = predicate,
+        .object = invalid,
+    });
+
+    try std.testing.expect(isDatatypeConsistent(&materialization, .{}));
+    try std.testing.expect(!isDatatypeConsistent(&materialization, .{ .xsd_integer = true }));
+}
+
+test "integer lexical spaces and xsd:int bounds are exact" {
+    try std.testing.expect(isIntegerLexical("+00042"));
+    try std.testing.expect(isIntegerLexical("-999999999999999999999999999"));
+    try std.testing.expect(!isIntegerLexical(""));
+    try std.testing.expect(!isIntegerLexical(" 3 "));
+    try std.testing.expect(!isIntegerLexical("1.0"));
+    try std.testing.expect(isIntLexical("-2147483648"));
+    try std.testing.expect(isIntLexical("2147483647"));
+    try std.testing.expect(!isIntLexical("-2147483649"));
+    try std.testing.expect(!isIntLexical("2147483648"));
+}
+
+test "recognized integer subtype ranges detect incompatible values" {
+    var materialization = Materialization.init(std.testing.allocator);
+    defer materialization.deinit();
+    const pool = materialization.termPool();
+    const subject = try pool.internNamedNode("https://example.com/subject");
+    const predicate = try pool.internNamedNode("https://example.com/predicate");
+    const rdfs_range = try pool.internNamedNode(rdf.rdfs_namespace ++ "range");
+    const xsd_int = try pool.internNamedNode(rdf.xsd_int);
+    const value = try pool.internTypedLiteral("2147483648", rdf.xsd_integer);
+    _ = try materialization.addAsserted(.{
+        .subject = predicate,
+        .predicate = rdfs_range,
+        .object = xsd_int,
+    });
+    _ = try materialization.addAsserted(.{
+        .subject = subject,
+        .predicate = predicate,
+        .object = value,
+    });
+
+    try std.testing.expect(!isDatatypeConsistent(&materialization, .{
+        .xsd_integer = true,
+        .xsd_int = true,
+    }));
+}
+
+test "recognized XMLLiteral rejects incomplete markup" {
+    var materialization = Materialization.init(std.testing.allocator);
+    defer materialization.deinit();
+    const pool = materialization.termPool();
+    const subject = try pool.internNamedNode("https://example.com/subject");
+    const predicate = try pool.internNamedNode("https://example.com/predicate");
+    const invalid = try pool.internTypedLiteral("<", rdf.rdf_xml_literal);
+    _ = try materialization.addAsserted(.{
+        .subject = subject,
+        .predicate = predicate,
+        .object = invalid,
+    });
+
+    try std.testing.expect(isDatatypeConsistent(&materialization, .{}));
+    try std.testing.expect(!isDatatypeConsistent(&materialization, .{
+        .rdf_xml_literal = true,
+    }));
 }
 
 fn exerciseMaterializationAllocations(allocator: std.mem.Allocator) !void {
