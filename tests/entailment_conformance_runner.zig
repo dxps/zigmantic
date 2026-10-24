@@ -38,16 +38,17 @@ pub fn run(comptime config: anytype) !void {
     const entries_close = std.mem.indexOfPos(u8, manifest, entries_open, "\n  )") orelse
         return error.InvalidManifest;
 
-    var cursor = entries_open + 1;
     var case_count: usize = 0;
     var expected_failure_count: usize = 0;
     var unexpected: usize = 0;
-    while (std.mem.indexOfPos(u8, manifest, cursor, "<#")) |id_open| {
-        if (id_open >= entries_close) break;
-        const id_close = std.mem.indexOfScalarPos(u8, manifest, id_open, '>') orelse
+    var lines = std.mem.splitScalar(u8, manifest[entries_open + 1 .. entries_close], '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trimStart(u8, line, " \t\r");
+        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+        const id_open = std.mem.indexOf(u8, trimmed, "<#") orelse continue;
+        const id_close = std.mem.indexOfScalarPos(u8, trimmed, id_open, '>') orelse
             return error.InvalidManifest;
-        const id = manifest[id_open + 2 .. id_close];
-        cursor = id_close + 1;
+        const id = trimmed[id_open + 2 .. id_close];
 
         const case = try readCase(manifest, entries_close, id);
         const passed = try runCase(config.suite_dir, case);
@@ -142,7 +143,11 @@ fn runCase(comptime suite_dir: []const u8, case: Case) !bool {
         _ = try entailment.materializeRdfsCore(&actual);
     }
 
-    const entailed = if (expected) |*target|
+    const consistent = case.regime == .simple or
+        entailment.isMandatoryDatatypeConsistent(&actual);
+    const entailed = if (!consistent)
+        true
+    else if (expected) |*target|
         try simplyEntails(allocator, &actual, target)
     else
         false;

@@ -149,15 +149,17 @@ separate packages only after their APIs and release cycles become independently 
   and applies `rdfD2` predicate-property inference idempotently.
 - The official RDF 1.1 model-theory manifest and its referenced premise/conclusion files
   are vendored at the same pinned W3C revision as the syntax suites.
-- The model-theory runner covers all 51 simple, RDF, and RDFS entailment entries with
+- The model-theory runner covers all 48 active simple, RDF, and RDFS entailment entries with
   existential blank-node matching and an exact expected-failure baseline.
 - Target-aware `rdf:_n` axioms plus the directly corresponding `rdfs12` and `rdfs7`
   consequences implement RDFS container-membership semantics.
 - The finite non-container RDFS axioms and all `rdfs1`–`rdfs13` rule patterns now run to
   a transactional fixed point for ordinary RDF triples.
-- The current semantic baseline passes 33 cases and tracks 18 failures covering the
-  unimplemented datatype interpretation and inconsistency behavior.
-- The local suite has 76 tests; all 827 integrated syntax/evaluation cases still pass.
+- Mandatory `xsd:string` and `rdf:langString` consistency detects malformed language
+  strings and disjoint RDFS range constraints without recognizing optional datatypes.
+- The current semantic baseline passes 34 cases and tracks 14 failures covering optional
+  datatype interpretation, value equality, and inconsistency behavior.
+- The local suite has 79 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -168,14 +170,15 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 5 — indexed in-memory quad store: complete.
 - Milestone 6 — RDF/RDFS semantics and entailment: in progress; the materialization
   boundary, RDF core, container membership, and general RDFS rules are implemented;
-  datatype semantics and consistency checking remain.
+  mandatory datatype consistency is implemented, while optional datatype semantics
+  remain.
 - Milestones 7–14: not started.
 
 ## Next actions
 
-1. Implement datatype lexical validation and inconsistency detection for the mandatory
-   `xsd:string` and `rdf:langString` datatypes.
-2. Add value equality and recognized XSD datatype interpretation incrementally against
+1. Add lexical validation and inconsistency detection for explicitly recognized
+   `xsd:integer`, `xsd:int`, and `rdf:XMLLiteral` datatypes.
+2. Add value equality for integer/decimal and IEEE float/double datatypes incrementally against
    the exact failing cases.
 3. Add generalized RDF intermediate support where required for complete closure, then
    audit RDF/RDFS conformance and remove every newly passing baseline case.
@@ -576,3 +579,18 @@ separate packages only after their APIs and release cycles become independently 
   testing.
 - Removed the subproperty semantics case from the expected-failure baseline, raising
   the official model-theory result from 32/51 to 33/51 with 76 local tests passing.
+
+### 2026-10-24 — Mandatory datatype consistency
+
+- Corrected manifest list parsing to ignore Turtle comment lines, excluding three
+  rescinded or duplicate entries that had incorrectly inflated the suite from 48 to 51
+  cases.
+- Added a read-only consistency layer for the universally recognized `xsd:string` and
+  `rdf:langString` datatypes.
+- Detected invalid language-string structure and disjoint mandatory datatype ranges
+  directly over the materialized graph without generalized literal-subject triples.
+- Made inconsistent premises entail every conclusion in the conformance runner.
+- Cleared the mandatory-datatype RDFS inconsistency case and established the corrected
+  official baseline at 34/48 active cases with 14 exact failures.
+- Added three focused consistency tests, bringing the local suite to 79 tests while all
+  827 syntax/evaluation cases continue to pass.

@@ -161,4 +161,10 @@ per-round snapshots until no triple is added. All additions share one transactio
 allocation failure rolls the layer back. Conclusions that require generalized RDF
 intermediates are intentionally skipped because the core graph type enforces ordinary
 RDF subject and predicate positions. Datatype value interpretation and inconsistency
-detection remain separate concerns.
+detection for optional recognized datatype IRIs remain separate concerns.
+
+Mandatory datatype consistency is a read-only check over the materialized union. It
+recognizes only `xsd:string` and `rdf:langString`, whose value spaces are fixed and
+disjoint, and evaluates applicable RDFS range constraints directly so it does not need
+illegal generalized triples with literal subjects. Optional XSD and RDF datatype IRIs
+are not treated as recognized until an explicit datatype layer supports them.

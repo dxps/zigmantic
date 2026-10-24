@@ -51,8 +51,10 @@ are compared by RDF dataset isomorphism, including blank nodes used as graph nam
 executable expected-failure list is currently empty; all 357 manifest entries pass, and
 any regression fails the build.
 
-The model-theory runner executes all 51 positive and negative entailment entries across
+The model-theory runner executes all 48 active positive and negative entailment entries across
 the simple, RDF, and RDFS regimes. Graph-valued conclusions use existential blank-node
 matching. A `false` result represents an inconsistent premise, which the current engine
-does not yet detect. The executable baseline has 33 passing cases and 18 exact expected
-failures; regressions and newly passing cases both fail the build until reviewed.
+now detects for mandatory RDF datatypes. The executable baseline has 34 passing cases
+and 14 exact expected failures; regressions and newly passing cases both fail the build
+until reviewed. Three commented-out, rescinded or duplicate entries remain in the
+upstream manifest text but are correctly excluded from execution.

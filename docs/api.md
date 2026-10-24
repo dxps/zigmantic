@@ -183,6 +183,13 @@ only ordinary RDF triples: generalized intermediate triples requiring literal su
 or non-IRI predicates are not represented by the current RDF data model. Datatype value
 interpretation and inconsistency detection remain separate layers.
 
+`isMandatoryDatatypeConsistent` checks the datatype semantics required by every RDF
+interpretation. It rejects `rdf:langString` literals without a language tag and detects
+incompatible RDFS range constraints between the disjoint `xsd:string` and
+`rdf:langString` value spaces. It deliberately does not interpret optional datatype
+IRIs; support for those is added through a separate recognized-datatype layer rather
+than silently assuming universal recognition.
+
 ## IRI references
 
 `iri.resolveAlloc(allocator, base, reference)` returns an owned absolute IRI using the

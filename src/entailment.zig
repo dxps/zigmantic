@@ -584,6 +584,67 @@ fn isRdfPredicate(pool: *const rdf.TermPool, term: rdf.TermId) bool {
     };
 }
 
+/// Reports consistency for the two datatype IRIs that every RDF interpretation
+/// must recognize: `xsd:string` and `rdf:langString`. This checks literal lexical
+/// validity and RDFS range constraints whose objects have values fixed by those
+/// datatypes. Optional datatype IRIs are intentionally not interpreted here.
+pub fn isMandatoryDatatypeConsistent(materialization: *const Materialization) bool {
+    const pool = materialization.termPoolConst();
+    var facts = materialization.iterator(.all);
+    while (facts.next()) |fact| {
+        const object = pool.view(fact.object) orelse return false;
+        const literal = switch (object) {
+            .literal => |value| value,
+            else => continue,
+        };
+        if (!isMandatoryLiteralWellTyped(literal)) return false;
+
+        var constraints = materialization.iterator(.all);
+        while (constraints.next()) |constraint| {
+            const predicate = pool.view(constraint.predicate) orelse return false;
+            const predicate_iri = switch (predicate) {
+                .named_node => |iri| iri,
+                else => return false,
+            };
+            if (!std.mem.eql(u8, predicate_iri, rdf.rdfs_namespace ++ "range") or
+                constraint.subject != fact.predicate)
+            {
+                continue;
+            }
+            const range = pool.view(constraint.object) orelse return false;
+            const range_iri = switch (range) {
+                .named_node => |iri| iri,
+                else => continue,
+            };
+            if (mandatoryDatatypeMembership(literal, range_iri)) |belongs| {
+                if (!belongs) return false;
+            }
+        }
+    }
+    return true;
+}
+
+fn isMandatoryLiteralWellTyped(literal: rdf.LiteralView) bool {
+    if (std.mem.eql(u8, literal.datatype, rdf.xsd_string)) return literal.language == null;
+    if (std.mem.eql(u8, literal.datatype, rdf.rdf_lang_string)) return literal.language != null;
+    return true;
+}
+
+fn mandatoryDatatypeMembership(literal: rdf.LiteralView, datatype: []const u8) ?bool {
+    if (!std.mem.eql(u8, datatype, rdf.xsd_string) and
+        !std.mem.eql(u8, datatype, rdf.rdf_lang_string))
+    {
+        return null;
+    }
+    if (std.mem.eql(u8, literal.datatype, rdf.xsd_string)) {
+        return std.mem.eql(u8, datatype, rdf.xsd_string) and literal.language == null;
+    }
+    if (std.mem.eql(u8, literal.datatype, rdf.rdf_lang_string)) {
+        return std.mem.eql(u8, datatype, rdf.rdf_lang_string) and literal.language != null;
+    }
+    return null;
+}
+
 fn collectMembershipTerm(
     destination: *rdf.TermPool,
     source: *const rdf.TermPool,
@@ -918,6 +979,68 @@ test "RDFS core materialization reaches a rule fixed point" {
 
     const repeated = try materializeRdfsCore(&materialization);
     try std.testing.expectEqual(@as(usize, 0), repeated.inferred);
+}
+
+test "mandatory datatype consistency detects disjoint RDFS literal ranges" {
+    var materialization = Materialization.init(std.testing.allocator);
+    defer materialization.deinit();
+    const pool = materialization.termPool();
+    const subject = try pool.internNamedNode("https://example.com/subject");
+    const predicate = try pool.internNamedNode("https://example.com/predicate");
+    const rdfs_range = try pool.internNamedNode(rdf.rdfs_namespace ++ "range");
+    const rdf_lang_string = try pool.internNamedNode(rdf.rdf_lang_string);
+    const value = try pool.internSimpleLiteral("value");
+    _ = try materialization.addAsserted(.{
+        .subject = predicate,
+        .predicate = rdfs_range,
+        .object = rdf_lang_string,
+    });
+    _ = try materialization.addAsserted(.{
+        .subject = subject,
+        .predicate = predicate,
+        .object = value,
+    });
+
+    try std.testing.expect(!isMandatoryDatatypeConsistent(&materialization));
+}
+
+test "mandatory datatype consistency accepts matching language values" {
+    var materialization = Materialization.init(std.testing.allocator);
+    defer materialization.deinit();
+    const pool = materialization.termPool();
+    const subject = try pool.internNamedNode("https://example.com/subject");
+    const predicate = try pool.internNamedNode("https://example.com/predicate");
+    const rdfs_range = try pool.internNamedNode(rdf.rdfs_namespace ++ "range");
+    const rdf_lang_string = try pool.internNamedNode(rdf.rdf_lang_string);
+    const value = try pool.internLanguageLiteral("salut", "ro");
+    _ = try materialization.addAsserted(.{
+        .subject = predicate,
+        .predicate = rdfs_range,
+        .object = rdf_lang_string,
+    });
+    _ = try materialization.addAsserted(.{
+        .subject = subject,
+        .predicate = predicate,
+        .object = value,
+    });
+
+    try std.testing.expect(isMandatoryDatatypeConsistent(&materialization));
+}
+
+test "rdf:langString without a language tag is inconsistent" {
+    var materialization = Materialization.init(std.testing.allocator);
+    defer materialization.deinit();
+    const pool = materialization.termPool();
+    const subject = try pool.internNamedNode("https://example.com/subject");
+    const predicate = try pool.internNamedNode("https://example.com/predicate");
+    const invalid = try pool.internTypedLiteral("value", rdf.rdf_lang_string);
+    _ = try materialization.addAsserted(.{
+        .subject = subject,
+        .predicate = predicate,
+        .object = invalid,
+    });
+
+    try std.testing.expect(!isMandatoryDatatypeConsistent(&materialization));
 }
 
 fn exerciseMaterializationAllocations(allocator: std.mem.Allocator) !void {
