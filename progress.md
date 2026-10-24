@@ -171,10 +171,13 @@ separate packages only after their APIs and release cycles become independently 
 - Plain RDF entailment now includes conclusion-directed `rdf:_n` property axioms.
 - Adversarial simple-entailment tests cover backtracking, shared blank-node consistency,
   cycles, and valid non-injective mappings.
+- Native Zig fuzz targets exercise simple-entailment mapping and RDFS closure with
+  seeded corpora and check monotonicity, blank-node renaming, closure idempotence, and
+  asserted-provenance preservation.
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 105 tests; all 827 integrated syntax/evaluation cases still pass.
+- The local suite has 107 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -190,8 +193,9 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Add property and fuzz testing for entailment matching and rule-closure invariants.
-2. Begin milestone 7 with SPARQL 1.1 tokenizer, parser, and algebra boundaries.
+1. Begin milestone 7 with SPARQL 1.1 tokenizer, parser, and algebra boundaries.
+2. Vendor and classify the official SPARQL 1.1 query syntax tests before expanding the
+   grammar beyond the first parser slice.
 
 ## Session log
 
@@ -708,3 +712,18 @@ separate packages only after their APIs and release cycles become independently 
   explicit, opt-in scope of additional recognized datatypes.
 - Passed all 48 model-theory cases, 827 syntax/evaluation cases, and 105 local tests;
   the complete build now runs 110 tests.
+
+### 2026-10-24 — Entailment property and fuzz hardening
+
+- Added native `std.testing.fuzz` targets for existential blank-node matching and RDFS
+  rule closure, with fixed seed corpora retained as ordinary-test smoke cases.
+- Generated compact graphs containing named nodes, shared and renamed blank nodes,
+  literals, duplicate triples, and premise extensions.
+- Asserted simple-entailment invariance under blank-node renaming and monotonicity when
+  additional triples are added to a premise.
+- Generated variable-length RDFS subproperty chains, including chains whose intermediate
+  property is a blank node and therefore requires the generalized closure.
+- Asserted RDFS monotonicity, repeated entailment stability, materialization idempotence,
+  and preservation of asserted provenance.
+- Passed all 48 model-theory cases, 827 syntax/evaluation cases, and 107 local tests;
+  the complete build now runs 112 tests.

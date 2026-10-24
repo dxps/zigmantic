@@ -2281,6 +2281,246 @@ test "simple entailment rejects inconsistent shared blank-node mappings" {
     )));
 }
 
+test "fuzz simple entailment mapping and monotonicity" {
+    try std.testing.fuzz({}, fuzzSimpleEntailment, .{ .corpus = &.{
+        "\x00\x01\x02\x03",
+        "\xff\xfe\xfd\xfc\xfb\xfa\xf9\xf8",
+        "blank-node-backtracking",
+    } });
+}
+
+fn fuzzSimpleEntailment(_: void, smith: *std.testing.Smith) !void {
+    var premise = rdf.Graph.init(std.testing.allocator);
+    defer premise.deinit();
+    var extended = rdf.Graph.init(std.testing.allocator);
+    defer extended.deinit();
+    var conclusion = rdf.Graph.init(std.testing.allocator);
+    defer conclusion.deinit();
+
+    const premise_subjects = [_]rdf.TermId{
+        try premise.terms.internNamedNode("https://example.com/a"),
+        try premise.terms.internNamedNode("https://example.com/b"),
+        try premise.terms.internBlankNode("x"),
+        try premise.terms.internBlankNode("y"),
+    };
+    const extended_subjects = [_]rdf.TermId{
+        try extended.terms.internNamedNode("https://example.com/a"),
+        try extended.terms.internNamedNode("https://example.com/b"),
+        try extended.terms.internBlankNode("x"),
+        try extended.terms.internBlankNode("y"),
+    };
+    const conclusion_subjects = [_]rdf.TermId{
+        try conclusion.terms.internNamedNode("https://example.com/a"),
+        try conclusion.terms.internNamedNode("https://example.com/b"),
+        try conclusion.terms.internBlankNode("renamed-x"),
+        try conclusion.terms.internBlankNode("renamed-y"),
+    };
+    const premise_predicates = [_]rdf.TermId{
+        try premise.terms.internNamedNode("https://example.com/p"),
+        try premise.terms.internNamedNode("https://example.com/q"),
+    };
+    const extended_predicates = [_]rdf.TermId{
+        try extended.terms.internNamedNode("https://example.com/p"),
+        try extended.terms.internNamedNode("https://example.com/q"),
+    };
+    const conclusion_predicates = [_]rdf.TermId{
+        try conclusion.terms.internNamedNode("https://example.com/p"),
+        try conclusion.terms.internNamedNode("https://example.com/q"),
+    };
+    const premise_objects = [_]rdf.TermId{
+        premise_subjects[0],
+        premise_subjects[1],
+        premise_subjects[2],
+        premise_subjects[3],
+        try premise.terms.internSimpleLiteral("one"),
+        try premise.terms.internSimpleLiteral("two"),
+        try premise.terms.internNamedNode("https://example.com/c"),
+        try premise.terms.internBlankNode("z"),
+    };
+    const extended_objects = [_]rdf.TermId{
+        extended_subjects[0],
+        extended_subjects[1],
+        extended_subjects[2],
+        extended_subjects[3],
+        try extended.terms.internSimpleLiteral("one"),
+        try extended.terms.internSimpleLiteral("two"),
+        try extended.terms.internNamedNode("https://example.com/c"),
+        try extended.terms.internBlankNode("z"),
+    };
+    const conclusion_objects = [_]rdf.TermId{
+        conclusion_subjects[0],
+        conclusion_subjects[1],
+        conclusion_subjects[2],
+        conclusion_subjects[3],
+        try conclusion.terms.internSimpleLiteral("one"),
+        try conclusion.terms.internSimpleLiteral("two"),
+        try conclusion.terms.internNamedNode("https://example.com/c"),
+        try conclusion.terms.internBlankNode("renamed-z"),
+    };
+
+    const triple_count: usize = smith.value(u3);
+    for (0..triple_count) |_| {
+        const subject_index: usize = smith.value(u2);
+        const predicate_index: usize = smith.value(u1);
+        const object_index: usize = smith.value(u3);
+        _ = try premise.add(.{
+            .subject = premise_subjects[subject_index],
+            .predicate = premise_predicates[predicate_index],
+            .object = premise_objects[object_index],
+        });
+        _ = try extended.add(.{
+            .subject = extended_subjects[subject_index],
+            .predicate = extended_predicates[predicate_index],
+            .object = extended_objects[object_index],
+        });
+        _ = try conclusion.add(.{
+            .subject = conclusion_subjects[subject_index],
+            .predicate = conclusion_predicates[predicate_index],
+            .object = conclusion_objects[object_index],
+        });
+    }
+    const extra_count: usize = smith.value(u2);
+    for (0..extra_count) |_| {
+        _ = try extended.add(.{
+            .subject = extended_subjects[@as(usize, smith.value(u2))],
+            .predicate = extended_predicates[@as(usize, smith.value(u1))],
+            .object = extended_objects[@as(usize, smith.value(u3))],
+        });
+    }
+
+    try std.testing.expect(try entailsGraph(
+        std.testing.allocator,
+        &premise,
+        &conclusion,
+        .{ .regime = .simple },
+    ));
+    try std.testing.expect(try entailsGraph(
+        std.testing.allocator,
+        &extended,
+        &conclusion,
+        .{ .regime = .simple },
+    ));
+}
+
+test "fuzz RDFS closure monotonicity and idempotence" {
+    try std.testing.fuzz({}, fuzzRdfsClosure, .{ .corpus = &.{
+        "\x00\x00\x00\x00",
+        "\xff\xff\xff\xff\xff\xff",
+        "generalized-rdfs-chain",
+    } });
+}
+
+fn fuzzRdfsClosure(_: void, smith: *std.testing.Smith) !void {
+    var premise = rdf.Graph.init(std.testing.allocator);
+    defer premise.deinit();
+    var extended = rdf.Graph.init(std.testing.allocator);
+    defer extended.deinit();
+
+    const property_iris = [_][]const u8{
+        "https://example.com/p0",
+        "https://example.com/p1",
+        "https://example.com/p2",
+        "https://example.com/p3",
+    };
+    var premise_properties: [4]rdf.TermId = undefined;
+    var extended_properties: [4]rdf.TermId = undefined;
+    const chain_len: usize = @as(usize, smith.value(u2)) + 1;
+    const blank_intermediate = chain_len > 1 and smith.value(bool);
+    for (0..chain_len) |index| {
+        if (blank_intermediate and index == 1) {
+            premise_properties[index] = try premise.terms.internBlankNode("generalized-property");
+            extended_properties[index] = try extended.terms.internBlankNode("generalized-property");
+        } else {
+            premise_properties[index] = try premise.terms.internNamedNode(property_iris[index]);
+            extended_properties[index] = try extended.terms.internNamedNode(property_iris[index]);
+        }
+    }
+    const premise_sub_property = try premise.terms.internNamedNode(rdf.rdfs_namespace ++ "subPropertyOf");
+    const extended_sub_property = try extended.terms.internNamedNode(rdf.rdfs_namespace ++ "subPropertyOf");
+    for (0..chain_len - 1) |index| {
+        _ = try premise.add(.{
+            .subject = premise_properties[index],
+            .predicate = premise_sub_property,
+            .object = premise_properties[index + 1],
+        });
+        _ = try extended.add(.{
+            .subject = extended_properties[index],
+            .predicate = extended_sub_property,
+            .object = extended_properties[index + 1],
+        });
+    }
+    const premise_domain = try premise.terms.internNamedNode(rdf.rdfs_namespace ++ "domain");
+    const extended_domain = try extended.terms.internNamedNode(rdf.rdfs_namespace ++ "domain");
+    const premise_class = try premise.terms.internNamedNode("https://example.com/Class");
+    const extended_class = try extended.terms.internNamedNode("https://example.com/Class");
+    const premise_subject = try premise.terms.internNamedNode("https://example.com/subject");
+    const extended_subject = try extended.terms.internNamedNode("https://example.com/subject");
+    const premise_object = try premise.terms.internNamedNode("https://example.com/object");
+    const extended_object = try extended.terms.internNamedNode("https://example.com/object");
+    _ = try premise.add(.{
+        .subject = premise_properties[chain_len - 1],
+        .predicate = premise_domain,
+        .object = premise_class,
+    });
+    _ = try extended.add(.{
+        .subject = extended_properties[chain_len - 1],
+        .predicate = extended_domain,
+        .object = extended_class,
+    });
+    _ = try premise.add(.{
+        .subject = premise_subject,
+        .predicate = premise_properties[0],
+        .object = premise_object,
+    });
+    _ = try extended.add(.{
+        .subject = extended_subject,
+        .predicate = extended_properties[0],
+        .object = extended_object,
+    });
+
+    const extra_count: usize = smith.value(u2);
+    for (0..extra_count) |_| {
+        _ = try extended.add(.{
+            .subject = extended_subject,
+            .predicate = extended_properties[@as(usize, smith.value(u2)) % chain_len],
+            .object = extended_object,
+        });
+    }
+
+    var conclusion = rdf.Graph.init(std.testing.allocator);
+    defer conclusion.deinit();
+    const conclusion_subject = try conclusion.terms.internNamedNode("https://example.com/subject");
+    const rdf_type = try conclusion.terms.internNamedNode(rdf.rdf_namespace ++ "type");
+    const conclusion_class = try conclusion.terms.internNamedNode("https://example.com/Class");
+    _ = try conclusion.add(.{
+        .subject = conclusion_subject,
+        .predicate = rdf_type,
+        .object = conclusion_class,
+    });
+
+    try std.testing.expect(try entailsGraph(
+        std.testing.allocator,
+        &premise,
+        &conclusion,
+        .{ .regime = .rdfs },
+    ));
+    try std.testing.expect(try entailsGraph(
+        std.testing.allocator,
+        &extended,
+        &conclusion,
+        .{ .regime = .rdfs },
+    ));
+
+    var materialization = try Materialization.fromGraph(std.testing.allocator, &extended);
+    defer materialization.deinit();
+    const asserted_count = materialization.len(.asserted);
+    try materializeForRegime(&materialization, &conclusion, .rdfs);
+    const first_closure_len = materialization.len(.all);
+    try materializeForRegime(&materialization, &conclusion, .rdfs);
+    try std.testing.expectEqual(first_closure_len, materialization.len(.all));
+    try std.testing.expectEqual(asserted_count, materialization.len(.asserted));
+}
+
 fn exerciseSimpleEntailmentAllocations(allocator: std.mem.Allocator) !void {
     var premise = rdf.Graph.init(allocator);
     defer premise.deinit();
