@@ -126,8 +126,14 @@ separate packages only after their APIs and release cycles become independently 
 - The local suite has 43 tests; all 470 official RDF syntax/evaluation cases pass.
 - The first TriG parser slice routes shared Turtle grammar into default and named dataset
   graphs, supporting compact graph blocks, `GRAPH` blocks, and blank-node graph names.
-- The local suite has 46 tests; all 470 currently integrated official cases continue to
-  pass. TriG conformance is not yet claimed.
+- The official RDF 1.1 TriG manifest and its action/result files are vendored at the
+  same pinned W3C revision as the other RDF syntax suites.
+- The TriG manifest runner executes all 357 syntax and evaluation entries. Evaluation
+  uses dataset isomorphism, including blank-node graph names.
+- The current TriG baseline is 338 passing cases and 19 exact expected failures. TriG
+  conformance is not yet claimed.
+- The local suite has 46 tests; all 470 previously integrated official cases continue
+  to pass alongside the executable TriG baseline.
 
 ## Milestone status
 
@@ -140,8 +146,8 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Pin the official RDF 1.1 TriG suite and add a manifest-driven runner.
-2. Use the resulting failures to complete graph-block punctuation and edge grammar.
+1. Resolve the 19 TriG baseline failures by grammar cluster, removing each passing ID.
+2. Reach a zero-exclusion pass of all 357 official TriG cases.
 3. Add deterministic expanded TriG serialization and dataset round-trip coverage.
 
 ## Session log
@@ -360,3 +366,15 @@ separate packages only after their APIs and release cycles become independently 
 - Preserved document-wide blank-node identity across graph boundaries.
 - Added malformed-block and exhaustive dataset-routing allocation-failure coverage.
 - Passed all 46 local tests and retained all 470 integrated official cases.
+
+### 2026-10-24 — TriG conformance harness
+
+- Pinned and vendored the official RDF 1.1 TriG manifest, action inputs, expected
+  N-Quads datasets, provenance, and test-suite license at the existing W3C revision.
+- Added a manifest runner for all 357 positive syntax, negative syntax, and evaluation
+  entries.
+- Added blank-node-insensitive dataset isomorphism across subjects, objects, and graph
+  names for evaluation results.
+- Established an executable baseline of 338 passing cases and 19 exact known failures;
+  regressions and newly passing cases both require deliberate baseline updates.
+- Retained all 46 local tests and all 470 previously integrated official cases.
