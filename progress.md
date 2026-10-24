@@ -159,9 +159,11 @@ separate packages only after their APIs and release cycles become independently 
   strings and disjoint RDFS range constraints without recognizing optional datatypes.
 - Manifest-declared profiles now enable `xsd:integer`, `xsd:int`, and initial
   `rdf:XMLLiteral` lexical, value-space, and range consistency checks.
-- The current semantic baseline passes 40 cases and tracks eight failures covering
-  datatype value equivalence and `rdfD1` entailment.
-- The local suite has 83 tests; all 827 integrated syntax/evaluation cases still pass.
+- Recognized `xsd:decimal`, `xsd:float`, and `xsd:double` values now compare by semantic
+  value, including decimal canonicalization and IEEE-754 rounding behavior.
+- The current semantic baseline passes 47 cases and tracks only the remaining `rdfD1`
+  datatype entailment case.
+- The local suite has 85 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -172,16 +174,15 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 5 — indexed in-memory quad store: complete.
 - Milestone 6 — RDF/RDFS semantics and entailment: in progress; the materialization
   boundary, RDF core, container membership, and general RDFS rules are implemented;
-  mandatory and initial recognized-datatype consistency are implemented, while value
-  equivalence and generalized datatype entailment remain.
+  mandatory and recognized-datatype consistency plus numeric value equivalence are
+  implemented, while generalized datatype entailment remains.
 - Milestones 7–14: not started.
 
 ## Next actions
 
-1. Add value equality for `xsd:integer`/`xsd:decimal` and IEEE float/double datatypes
-   incrementally against the exact failing cases.
-2. Implement `rdfD1` datatype entailment without exposing illegal literal-subject
+1. Implement `rdfD1` datatype entailment without exposing illegal literal-subject
    triples through the ordinary RDF graph API.
+2. Complete XMLLiteral validation with a standards-compliant XML parser.
 3. Add generalized RDF intermediate support where still required for complete closure, then
    audit RDF/RDFS conformance and remove every newly passing baseline case.
 
@@ -610,3 +611,17 @@ separate packages only after their APIs and release cycles become independently 
   34/48 to 40/48 with eight exact failures remaining.
 - Added opt-in, lexical-boundary, subtype-range, and XML-literal tests, bringing the
   local suite to 83 tests while retaining all 827 syntax/evaluation passes.
+
+### 2026-10-24 — Numeric datatype value equality
+
+- Added manifest recognition for `xsd:decimal`, `xsd:float`, and `xsd:double`.
+- Added allocation-free canonical value comparison across integer, int, and decimal
+  lexical forms.
+- Added IEEE-754-width parsing and value comparison for float and double, including
+  datatype rounding, overflow to infinity, NaN, and signed-zero distinction.
+- Integrated recognized value equality into conclusion matching while retaining exact
+  RDF term equality for unknown datatype IRIs.
+- Cleared seven numeric-equivalence cases, raising the official model-theory baseline
+  from 40/48 to 47/48 with only `rdfD1` remaining.
+- Added focused decimal and IEEE comparison tests, bringing the local suite to 85 tests
+  while retaining all 827 syntax/evaluation passes.

@@ -192,6 +192,13 @@ incompatible RDFS ranges. Initial `rdf:XMLLiteral` support safely detects incomp
 structurally impossible markup but is not yet a complete XML 1.0 parser. Optional
 datatypes are never silently treated as recognized.
 
+`recognizedLiteralValuesEqual` compares two supported, well-typed literals by datatype
+value. Integer and decimal values use allocation-free canonical decimal comparison, so
+lexical forms such as `+0010` and `10.0` compare equal when their datatypes are
+recognized. Float and double values use their IEEE-754 widths, including rounding,
+infinities, NaN, and distinct positive and negative zero. A `null` result means at least
+one datatype is not recognized; it does not mean the values differ.
+
 ## IRI references
 
 `iri.resolveAlloc(allocator, base, reference)` returns an owned absolute IRI using the

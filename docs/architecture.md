@@ -171,3 +171,10 @@ are not treated as recognized until enabled in a `DatatypeProfile`. The initial 
 layer supports arbitrary-size `xsd:integer` lexical forms, bounded `xsd:int` values, and
 safe detection of incomplete `rdf:XMLLiteral` markup. XMLLiteral validation remains
 deliberately partial until a complete XML parser is available.
+
+Recognized literal equality is value-based rather than lexical. Integer and decimal
+forms are normalized as sign plus trimmed integral and fractional digits without
+allocation. Float and double forms are parsed at their declared IEEE-754 widths before
+comparison, preserving their specified rounding, infinities, NaN equality, and signed
+zero distinction. Unknown datatype IRIs fall back to ordinary RDF term equality rather
+than acquiring unsupported semantics.

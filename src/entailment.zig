@@ -588,6 +588,9 @@ pub const DatatypeProfile = struct {
     rdf_xml_literal: bool = false,
     xsd_integer: bool = false,
     xsd_int: bool = false,
+    xsd_decimal: bool = false,
+    xsd_float: bool = false,
+    xsd_double: bool = false,
 };
 
 const DatatypeKind = enum {
@@ -596,6 +599,9 @@ const DatatypeKind = enum {
     xsd_string,
     xsd_integer,
     xsd_int,
+    xsd_decimal,
+    xsd_float,
+    xsd_double,
 };
 
 /// Reports consistency for the mandatory RDF datatypes and the optional datatype
@@ -651,6 +657,9 @@ fn isLiteralWellTyped(literal: rdf.LiteralView, profile: DatatypeProfile) bool {
         .rdf_lang_string => literal.language != null,
         .xsd_integer => isIntegerLexical(literal.lexical_form),
         .xsd_int => isIntLexical(literal.lexical_form),
+        .xsd_decimal => parseDecimal(literal.lexical_form) != null,
+        .xsd_float => parseXsdFloat(f32, literal.lexical_form) != null,
+        .xsd_double => parseXsdFloat(f64, literal.lexical_form) != null,
         .rdf_xml_literal => isSupportedXmlLiteralLexical(literal.lexical_form),
     };
 }
@@ -670,9 +679,18 @@ fn datatypeMembership(
         .xsd_integer => switch (target) {
             .xsd_integer => true,
             .xsd_int => integerFitsInt(literal.lexical_form),
+            .xsd_decimal => true,
             else => false,
         },
-        .xsd_int => target == .xsd_int or target == .xsd_integer,
+        .xsd_int => target == .xsd_int or target == .xsd_integer or target == .xsd_decimal,
+        .xsd_decimal => switch (target) {
+            .xsd_decimal => true,
+            .xsd_integer => decimalIsInteger(literal.lexical_form),
+            .xsd_int => decimalFitsInt(literal.lexical_form),
+            else => false,
+        },
+        .xsd_float => target == .xsd_float or target == .xsd_double,
+        .xsd_double => target == .xsd_double,
     };
 }
 
@@ -684,7 +702,151 @@ fn datatypeKind(iri: []const u8, profile: DatatypeProfile) ?DatatypeKind {
     }
     if (profile.xsd_integer and std.mem.eql(u8, iri, rdf.xsd_integer)) return .xsd_integer;
     if (profile.xsd_int and std.mem.eql(u8, iri, rdf.xsd_int)) return .xsd_int;
+    if (profile.xsd_decimal and std.mem.eql(u8, iri, rdf.xsd_decimal)) return .xsd_decimal;
+    if (profile.xsd_float and std.mem.eql(u8, iri, rdf.xsd_float)) return .xsd_float;
+    if (profile.xsd_double and std.mem.eql(u8, iri, rdf.xsd_double)) return .xsd_double;
     return null;
+}
+
+/// Returns semantic equality for two well-typed literals when both datatype
+/// values are understood by `profile`, or `null` when either datatype is unknown.
+pub fn recognizedLiteralValuesEqual(
+    left: rdf.LiteralView,
+    right: rdf.LiteralView,
+    profile: DatatypeProfile,
+) ?bool {
+    const left_kind = datatypeKind(left.datatype, profile) orelse return null;
+    const right_kind = datatypeKind(right.datatype, profile) orelse return null;
+    if (!isLiteralWellTyped(left, profile) or !isLiteralWellTyped(right, profile)) return false;
+
+    if (isDecimalKind(left_kind) and isDecimalKind(right_kind)) {
+        return decimalValuesEqual(left.lexical_form, right.lexical_form);
+    }
+    if (isFloatKind(left_kind) and isFloatKind(right_kind)) {
+        return floatValuesEqual(left_kind, left.lexical_form, right_kind, right.lexical_form);
+    }
+    return switch (left_kind) {
+        .xsd_string => right_kind == .xsd_string and
+            std.mem.eql(u8, left.lexical_form, right.lexical_form),
+        .rdf_lang_string => right_kind == .rdf_lang_string and
+            std.mem.eql(u8, left.lexical_form, right.lexical_form) and
+            optionalStringsEqual(left.language, right.language),
+        .rdf_xml_literal => right_kind == .rdf_xml_literal and
+            std.mem.eql(u8, left.lexical_form, right.lexical_form),
+        else => false,
+    };
+}
+
+fn isDecimalKind(kind: DatatypeKind) bool {
+    return kind == .xsd_integer or kind == .xsd_int or kind == .xsd_decimal;
+}
+
+fn isFloatKind(kind: DatatypeKind) bool {
+    return kind == .xsd_float or kind == .xsd_double;
+}
+
+fn optionalStringsEqual(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left) |left_value| {
+        const right_value = right orelse return false;
+        return std.mem.eql(u8, left_value, right_value);
+    }
+    return right == null;
+}
+
+const DecimalParts = struct {
+    negative: bool,
+    integer: []const u8,
+    fraction: []const u8,
+};
+
+fn parseDecimal(lexical: []const u8) ?DecimalParts {
+    if (lexical.len == 0) return null;
+    var index: usize = 0;
+    var negative = false;
+    if (lexical[0] == '+' or lexical[0] == '-') {
+        negative = lexical[0] == '-';
+        index = 1;
+    }
+    if (index == lexical.len) return null;
+
+    const digits_start = index;
+    while (index < lexical.len and std.ascii.isDigit(lexical[index])) : (index += 1) {}
+    const integer_end = index;
+    var fraction: []const u8 = "";
+    if (index < lexical.len and lexical[index] == '.') {
+        index += 1;
+        const fraction_start = index;
+        while (index < lexical.len and std.ascii.isDigit(lexical[index])) : (index += 1) {}
+        fraction = lexical[fraction_start..index];
+    }
+    if (index != lexical.len or (integer_end == digits_start and fraction.len == 0)) return null;
+
+    var integer = lexical[digits_start..integer_end];
+    while (integer.len > 0 and integer[0] == '0') integer = integer[1..];
+    while (fraction.len > 0 and fraction[fraction.len - 1] == '0') {
+        fraction = fraction[0 .. fraction.len - 1];
+    }
+    if (integer.len == 0 and fraction.len == 0) negative = false;
+    return .{ .negative = negative, .integer = integer, .fraction = fraction };
+}
+
+fn decimalValuesEqual(left: []const u8, right: []const u8) bool {
+    const left_parts = parseDecimal(left) orelse return false;
+    const right_parts = parseDecimal(right) orelse return false;
+    return left_parts.negative == right_parts.negative and
+        std.mem.eql(u8, left_parts.integer, right_parts.integer) and
+        std.mem.eql(u8, left_parts.fraction, right_parts.fraction);
+}
+
+fn decimalIsInteger(lexical: []const u8) bool {
+    const parts = parseDecimal(lexical) orelse return false;
+    return parts.fraction.len == 0;
+}
+
+fn decimalFitsInt(lexical: []const u8) bool {
+    const parts = parseDecimal(lexical) orelse return false;
+    if (parts.fraction.len != 0) return false;
+    var buffer: [32]u8 = undefined;
+    var length: usize = 0;
+    if (parts.negative) {
+        buffer[0] = '-';
+        length = 1;
+    }
+    const digits = if (parts.integer.len == 0) "0" else parts.integer;
+    if (length + digits.len > buffer.len) return false;
+    @memcpy(buffer[length .. length + digits.len], digits);
+    length += digits.len;
+    return isIntLexical(buffer[0..length]);
+}
+
+fn parseXsdFloat(comptime T: type, lexical: []const u8) ?T {
+    if (std.mem.eql(u8, lexical, "INF")) return std.math.inf(T);
+    if (std.mem.eql(u8, lexical, "-INF")) return -std.math.inf(T);
+    if (std.mem.eql(u8, lexical, "NaN")) return std.math.nan(T);
+    if (lexical.len == 0) return null;
+    for (lexical) |byte| if (std.ascii.isWhitespace(byte)) return null;
+    return std.fmt.parseFloat(T, lexical) catch null;
+}
+
+fn floatValuesEqual(
+    left_kind: DatatypeKind,
+    left_lexical: []const u8,
+    right_kind: DatatypeKind,
+    right_lexical: []const u8,
+) bool {
+    const left: f64 = if (left_kind == .xsd_float)
+        @floatCast(parseXsdFloat(f32, left_lexical) orelse return false)
+    else
+        parseXsdFloat(f64, left_lexical) orelse return false;
+    const right: f64 = if (right_kind == .xsd_float)
+        @floatCast(parseXsdFloat(f32, right_lexical) orelse return false)
+    else
+        parseXsdFloat(f64, right_lexical) orelse return false;
+    if (std.math.isNan(left) or std.math.isNan(right)) {
+        return std.math.isNan(left) and std.math.isNan(right);
+    }
+    if (left == 0 and right == 0) return std.math.signbit(left) == std.math.signbit(right);
+    return left == right;
 }
 
 fn isIntegerLexical(lexical: []const u8) bool {
@@ -1203,6 +1365,71 @@ test "recognized XMLLiteral rejects incomplete markup" {
     try std.testing.expect(!isDatatypeConsistent(&materialization, .{
         .rdf_xml_literal = true,
     }));
+}
+
+test "recognized decimal values compare independently of lexical form" {
+    const profile = DatatypeProfile{ .xsd_integer = true, .xsd_decimal = true };
+    const integer = rdf.LiteralView{
+        .lexical_form = "+0010",
+        .datatype = rdf.xsd_integer,
+        .language = null,
+    };
+    const decimal = rdf.LiteralView{
+        .lexical_form = "10.000",
+        .datatype = rdf.xsd_decimal,
+        .language = null,
+    };
+    const different = rdf.LiteralView{
+        .lexical_form = "10.001",
+        .datatype = rdf.xsd_decimal,
+        .language = null,
+    };
+    try std.testing.expect(recognizedLiteralValuesEqual(integer, decimal, profile).?);
+    try std.testing.expect(!recognizedLiteralValuesEqual(integer, different, profile).?);
+    try std.testing.expect(decimalValuesEqual("-0.0", "+000.000"));
+}
+
+test "recognized IEEE values compare after datatype rounding" {
+    const float_profile = DatatypeProfile{ .xsd_float = true };
+    const rounded_left = rdf.LiteralView{
+        .lexical_form = "16777206.5",
+        .datatype = rdf.xsd_float,
+        .language = null,
+    };
+    const rounded_right = rdf.LiteralView{
+        .lexical_form = "16777205.5",
+        .datatype = rdf.xsd_float,
+        .language = null,
+    };
+    const positive_zero = rdf.LiteralView{
+        .lexical_form = "0.0",
+        .datatype = rdf.xsd_float,
+        .language = null,
+    };
+    const negative_zero = rdf.LiteralView{
+        .lexical_form = "-0.0",
+        .datatype = rdf.xsd_float,
+        .language = null,
+    };
+    const infinity = rdf.LiteralView{
+        .lexical_form = "1E400",
+        .datatype = rdf.xsd_float,
+        .language = null,
+    };
+    const explicit_infinity = rdf.LiteralView{
+        .lexical_form = "INF",
+        .datatype = rdf.xsd_float,
+        .language = null,
+    };
+    const nan = rdf.LiteralView{
+        .lexical_form = "NaN",
+        .datatype = rdf.xsd_float,
+        .language = null,
+    };
+    try std.testing.expect(recognizedLiteralValuesEqual(rounded_left, rounded_right, float_profile).?);
+    try std.testing.expect(!recognizedLiteralValuesEqual(positive_zero, negative_zero, float_profile).?);
+    try std.testing.expect(recognizedLiteralValuesEqual(infinity, explicit_infinity, float_profile).?);
+    try std.testing.expect(recognizedLiteralValuesEqual(nan, nan, float_profile).?);
 }
 
 fn exerciseMaterializationAllocations(allocator: std.mem.Allocator) !void {

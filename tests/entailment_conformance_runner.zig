@@ -120,6 +120,21 @@ fn readCase(manifest: []const u8, definitions_start: usize, id: []const u8) !Cas
                 "mf:recognizedDatatypes",
                 "xsd:int",
             ),
+            .xsd_decimal = propertyListContains(
+                block,
+                "mf:recognizedDatatypes",
+                "xsd:decimal",
+            ),
+            .xsd_float = propertyListContains(
+                block,
+                "mf:recognizedDatatypes",
+                "xsd:float",
+            ),
+            .xsd_double = propertyListContains(
+                block,
+                "mf:recognizedDatatypes",
+                "xsd:double",
+            ),
         },
     };
 }
@@ -178,7 +193,7 @@ fn runCase(comptime suite_dir: []const u8, case: Case) !bool {
     const entailed = if (!consistent)
         true
     else if (expected) |*target|
-        try simplyEntails(allocator, &actual, target)
+        try simplyEntails(allocator, &actual, target, case.datatypes)
     else
         false;
     return entailed == (case.kind == .positive);
@@ -215,10 +230,11 @@ fn simplyEntails(
     allocator: std.mem.Allocator,
     actual: *const entailment.Materialization,
     expected: *const rdf.Graph,
+    datatypes: entailment.DatatypeProfile,
 ) !bool {
     var mappings: std.ArrayList(Mapping) = .empty;
     defer mappings.deinit(allocator);
-    return matchExpected(allocator, actual, expected, 0, &mappings);
+    return matchExpected(allocator, actual, expected, 0, &mappings, datatypes);
 }
 
 fn matchExpected(
@@ -227,15 +243,29 @@ fn matchExpected(
     expected: *const rdf.Graph,
     expected_index: usize,
     mappings: *std.ArrayList(Mapping),
+    datatypes: entailment.DatatypeProfile,
 ) !bool {
     if (expected_index == expected.len()) return true;
     const expected_triple = expected.items()[expected_index];
     var candidates = actual.iterator(.all);
     while (candidates.next()) |candidate| {
         const mapping_count = mappings.items.len;
-        if (try triplesMatch(allocator, actual, candidate, expected, expected_triple, mappings) and
-            try matchExpected(allocator, actual, expected, expected_index + 1, mappings))
-        {
+        if (try triplesMatch(
+            allocator,
+            actual,
+            candidate,
+            expected,
+            expected_triple,
+            mappings,
+            datatypes,
+        ) and try matchExpected(
+            allocator,
+            actual,
+            expected,
+            expected_index + 1,
+            mappings,
+            datatypes,
+        )) {
             return true;
         }
         mappings.items.len = mapping_count;
@@ -250,10 +280,11 @@ fn triplesMatch(
     expected: *const rdf.Graph,
     right: rdf.Triple,
     mappings: *std.ArrayList(Mapping),
+    datatypes: entailment.DatatypeProfile,
 ) !bool {
-    if (!try termsMatch(allocator, actual, left.predicate, expected, right.predicate, mappings)) return false;
-    if (!try termsMatch(allocator, actual, left.subject, expected, right.subject, mappings)) return false;
-    return termsMatch(allocator, actual, left.object, expected, right.object, mappings);
+    if (!try termsMatch(allocator, actual, left.predicate, expected, right.predicate, mappings, datatypes)) return false;
+    if (!try termsMatch(allocator, actual, left.subject, expected, right.subject, mappings, datatypes)) return false;
+    return termsMatch(allocator, actual, left.object, expected, right.object, mappings, datatypes);
 }
 
 fn termsMatch(
@@ -263,10 +294,18 @@ fn termsMatch(
     expected: *const rdf.Graph,
     expected_id: rdf.TermId,
     mappings: *std.ArrayList(Mapping),
+    datatypes: entailment.DatatypeProfile,
 ) !bool {
     const expected_value = expected.terms.view(expected_id) orelse return false;
     if (expected_value != .blank_node) {
-        return actual.termPoolConst().eqlTerm(actual_id, &expected.terms, expected_id);
+        if (try actual.termPoolConst().eqlTerm(actual_id, &expected.terms, expected_id)) return true;
+        const actual_value = actual.termPoolConst().view(actual_id) orelse return false;
+        if (actual_value != .literal or expected_value != .literal) return false;
+        return entailment.recognizedLiteralValuesEqual(
+            actual_value.literal,
+            expected_value.literal,
+            datatypes,
+        ) orelse false;
     }
     for (mappings.items) |mapping| {
         if (mapping.expected == expected_id) return mapping.actual == actual_id;

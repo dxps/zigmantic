@@ -15,6 +15,9 @@ pub const xsd_namespace = "http://www.w3.org/2001/XMLSchema#";
 pub const xsd_string = xsd_namespace ++ "string";
 pub const xsd_integer = xsd_namespace ++ "integer";
 pub const xsd_int = xsd_namespace ++ "int";
+pub const xsd_decimal = xsd_namespace ++ "decimal";
+pub const xsd_float = xsd_namespace ++ "float";
+pub const xsd_double = xsd_namespace ++ "double";
 
 const StringId = enum(u32) { _ };
 pub const TermId = enum(u32) { _ };
