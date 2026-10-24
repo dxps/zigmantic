@@ -55,7 +55,8 @@ The model-theory runner executes all 48 active positive and negative entailment 
 the simple, RDF, and RDFS regimes. Graph-valued conclusions use existential blank-node
 matching. A `false` result represents an inconsistent premise, which the current engine
 detects for mandatory RDF datatypes and supported explicitly recognized datatypes. The
-executable baseline has 47 passing cases and one exact expected failure; regressions and
-newly passing cases both fail the build until reviewed. Recognized numeric literals are
-compared by value. Three commented-out, rescinded or duplicate entries remain in the
-upstream manifest text but are correctly excluded from execution.
+executable expected-failure list is empty: all 48 active cases pass. Recognized numeric
+literals are compared by value, and `rdfD1` generalized literal-type consequences are
+matched virtually without weakening the ordinary RDF graph model. Three commented-out,
+rescinded or duplicate entries remain in the upstream manifest text but are correctly
+excluded from execution.

@@ -270,7 +270,73 @@ fn matchExpected(
         }
         mappings.items.len = mapping_count;
     }
+
+    var literal_sources = actual.iterator(.all);
+    while (literal_sources.next()) |source| {
+        const value = actual.termPoolConst().view(source.object) orelse return false;
+        if (value != .literal) continue;
+        const mapping_count = mappings.items.len;
+        if (try generalizedDatatypeTypeMatches(
+            allocator,
+            actual,
+            source.object,
+            expected,
+            expected_triple,
+            mappings,
+            datatypes,
+        ) and try matchExpected(
+            allocator,
+            actual,
+            expected,
+            expected_index + 1,
+            mappings,
+            datatypes,
+        )) {
+            return true;
+        }
+        mappings.items.len = mapping_count;
+    }
     return false;
+}
+
+fn generalizedDatatypeTypeMatches(
+    allocator: std.mem.Allocator,
+    actual: *const entailment.Materialization,
+    literal_id: rdf.TermId,
+    expected: *const rdf.Graph,
+    triple: rdf.Triple,
+    mappings: *std.ArrayList(Mapping),
+    datatypes: entailment.DatatypeProfile,
+) !bool {
+    const subject = expected.terms.view(triple.subject) orelse return false;
+    if (subject != .blank_node) return false;
+    const predicate = expected.terms.view(triple.predicate) orelse return false;
+    const predicate_iri = switch (predicate) {
+        .named_node => |iri| iri,
+        else => return false,
+    };
+    if (!std.mem.eql(u8, predicate_iri, rdf.rdf_namespace ++ "type")) return false;
+    const object = expected.terms.view(triple.object) orelse return false;
+    const datatype_iri = switch (object) {
+        .named_node => |iri| iri,
+        else => return false,
+    };
+    const literal = actual.termPoolConst().view(literal_id) orelse return false;
+    if (literal != .literal) return false;
+    if (!(entailment.recognizedLiteralBelongsTo(
+        literal.literal,
+        datatype_iri,
+        datatypes,
+    ) orelse false)) return false;
+    return termsMatch(
+        allocator,
+        actual,
+        literal_id,
+        expected,
+        triple.subject,
+        mappings,
+        datatypes,
+    );
 }
 
 fn triplesMatch(

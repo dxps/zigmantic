@@ -161,8 +161,9 @@ separate packages only after their APIs and release cycles become independently 
   `rdf:XMLLiteral` lexical, value-space, and range consistency checks.
 - Recognized `xsd:decimal`, `xsd:float`, and `xsd:double` values now compare by semantic
   value, including decimal canonicalization and IEEE-754 rounding behavior.
-- The current semantic baseline passes 47 cases and tracks only the remaining `rdfD1`
-  datatype entailment case.
+- Virtual generalized datatype facts now support `rdfD1` existential conclusions
+  without admitting literal subjects into ordinary RDF graphs.
+- All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
 - The local suite has 85 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
@@ -174,17 +175,18 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 5 — indexed in-memory quad store: complete.
 - Milestone 6 — RDF/RDFS semantics and entailment: in progress; the materialization
   boundary, RDF core, container membership, and general RDFS rules are implemented;
-  mandatory and recognized-datatype consistency plus numeric value equivalence are
-  implemented, while generalized datatype entailment remains.
+  mandatory and recognized-datatype consistency, numeric value equivalence, and the
+  official model-theory suite are implemented; API consolidation and completeness audit
+  remain.
 - Milestones 7–14: not started.
 
 ## Next actions
 
-1. Implement `rdfD1` datatype entailment without exposing illegal literal-subject
-   triples through the ordinary RDF graph API.
+1. Move conclusion-directed simple/RDF/RDFS entailment checking from the conformance
+   harness into a stable public API that composes the rule layers.
 2. Complete XMLLiteral validation with a standards-compliant XML parser.
-3. Add generalized RDF intermediate support where still required for complete closure, then
-   audit RDF/RDFS conformance and remove every newly passing baseline case.
+3. Audit generalized RDF intermediate requirements and the normative semantics beyond
+   the official suite before declaring milestone 6 complete.
 
 ## Session log
 
@@ -625,3 +627,14 @@ separate packages only after their APIs and release cycles become independently 
   from 40/48 to 47/48 with only `rdfD1` remaining.
 - Added focused decimal and IEEE comparison tests, bringing the local suite to 85 tests
   while retaining all 827 syntax/evaluation passes.
+
+### 2026-10-24 — rdfD1 generalized datatype entailment
+
+- Added public recognized-literal value-space membership queries.
+- Extended conclusion matching with virtual generalized `rdf:type` facts for recognized
+  literal values mapped through existential blank nodes.
+- Kept generalized literal-subject triples out of the ordinary RDF graph, store, and
+  materialization APIs.
+- Removed the final expected failure and passed all 48 active official RDF 1.1
+  model-theory cases with no exclusions.
+- Retained all 85 local tests and all 827 RDF syntax/evaluation cases.

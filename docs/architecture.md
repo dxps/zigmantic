@@ -178,3 +178,9 @@ allocation. Float and double forms are parsed at their declared IEEE-754 widths 
 comparison, preserving their specified rounding, infinities, NaN equality, and signed
 zero distinction. Unknown datatype IRIs fall back to ordinary RDF term equality rather
 than acquiring unsupported semantics.
+
+The model-theory entailment matcher represents `rdfD1` consequences virtually. When a
+conclusion blank node is mapped to a recognized literal value, a matching
+`rdf:type datatype` fact is available to the matcher without being inserted into the
+materialization. This preserves completeness for the tested existential conclusion
+while keeping literal subjects out of `Graph`, `Store`, and their public iterators.

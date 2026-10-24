@@ -199,6 +199,11 @@ recognized. Float and double values use their IEEE-754 widths, including roundin
 infinities, NaN, and distinct positive and negative zero. A `null` result means at least
 one datatype is not recognized; it does not mean the values differ.
 
+`recognizedLiteralBelongsTo` exposes the corresponding value-space membership test for
+a recognized datatype IRI. It returns `null` for unknown datatype semantics. This lets
+entailment checking implement `rdfD1` existential conclusions without inserting a
+generalized triple whose literal subject would violate the ordinary RDF graph API.
+
 ## IRI references
 
 `iri.resolveAlloc(allocator, base, reference)` returns an owned absolute IRI using the

@@ -737,6 +737,16 @@ pub fn recognizedLiteralValuesEqual(
     };
 }
 
+/// Returns whether a supported, well-typed literal value belongs to the named
+/// recognized datatype, or `null` when either datatype is unknown.
+pub fn recognizedLiteralBelongsTo(
+    literal: rdf.LiteralView,
+    datatype_iri: []const u8,
+    profile: DatatypeProfile,
+) ?bool {
+    return datatypeMembership(literal, datatype_iri, profile);
+}
+
 fn isDecimalKind(kind: DatatypeKind) bool {
     return kind == .xsd_integer or kind == .xsd_int or kind == .xsd_decimal;
 }
