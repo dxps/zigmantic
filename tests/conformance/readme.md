@@ -31,5 +31,5 @@ cannot silently omit cases.
 
 The Turtle runner executes positive syntax, negative syntax, and evaluation entries.
 Evaluation graphs are compared using blank-node-insensitive RDF graph isomorphism. Its
-exact known-failure list is a temporary, executable baseline: unexpected regressions and
-unexpectedly fixed cases both fail the build until the list is reviewed.
+executable expected-failure mechanism is currently empty; any regression fails the
+build, and any future temporary exclusion must be identified by its exact manifest ID.

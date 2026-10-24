@@ -34,9 +34,9 @@ not change the ownership or output guarantees of these whole-document functions.
 
 ## Turtle
 
-`parseTurtle(allocator, input, options)` currently implements the first incremental
-Turtle parser slice. `TurtleOptions.base_iri` supplies the optional retrieval or
-containing-document base. The parser supports `@base`, `@prefix`, `BASE`, and `PREFIX`
+`parseTurtle(allocator, input, options)` implements the RDF 1.1 Turtle grammar.
+`TurtleOptions.base_iri` supplies the optional retrieval or containing-document base.
+The parser supports `@base`, `@prefix`, `BASE`, and `PREFIX`
 directives; relative IRI references; default and named prefixed names; `a`; comments;
 labeled blank nodes; all four quoted-string forms; language and datatype suffixes; and
 integer, decimal, double, and boolean literals. Predicate lists (`;`), object lists
@@ -46,9 +46,8 @@ the standard `rdf:first`/`rdf:rest` chain and terminate in `rdf:nil`; `()` is `r
 itself.
 
 The returned graph owns all parsed terms and follows the same lifetime and error rules
-as `parseNTriples`. The current API is deliberately marked as a subset: complete
-prefixed-name and Unicode name grammar coverage, remaining syntax edge cases, and the
-official Turtle conformance suite remain before Turtle conformance can be claimed.
+as `parseNTriples`. Parser behavior is checked against all 313 positive syntax, negative
+syntax, and evaluation entries in the official RDF 1.1 Turtle manifest.
 
 ## IRI references
 

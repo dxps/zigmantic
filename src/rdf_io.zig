@@ -20,8 +20,8 @@ pub const TurtleOptions = struct {
 
 /// Parses the currently implemented RDF 1.1 Turtle subset into an owned graph.
 /// Directives, resources, RDF literal forms, labeled and anonymous blank nodes, and
-/// predicate/object lists, nested blank-node property lists, and RDF collections are
-/// supported. Remaining grammar coverage is added incrementally.
+/// Implements the RDF 1.1 Turtle grammar and resolves relative IRIs against the
+/// document base supplied through `options` or declared in the input.
 pub fn parseTurtle(
     allocator: std.mem.Allocator,
     input: []const u8,
@@ -275,10 +275,18 @@ const TurtleLexer = struct {
 
     fn scanWord(self: *TurtleLexer, start: usize) ParseError!TurtleToken {
         while (self.index < self.input.len and !isTurtleDelimiter(self.input[self.index])) {
+            if (self.input[self.index] == '\\') {
+                self.index += 1;
+                if (self.index >= self.input.len) return error.InvalidSyntax;
+            }
             self.index += 1;
         }
         if (self.index == start) return error.InvalidSyntax;
-        if (self.input[self.index - 1] == '.') self.index -= 1;
+        if (self.input[self.index - 1] == '.' and
+            (self.index - start < 2 or self.input[self.index - 2] != '\\'))
+        {
+            self.index -= 1;
+        }
         if (self.index == start) return error.InvalidSyntax;
         const word = self.input[start..self.index];
         if (std.ascii.eqlIgnoreCase(word, "BASE")) return .{ .tag = .base, .lexeme = word };
@@ -448,7 +456,11 @@ const TurtleParser = struct {
     ) ParseError!void {
         const subject = try self.parseSubject(graph, subject_token);
         const predicate_token = try self.nextToken();
-        try self.parsePredicateObjectList(graph, subject, predicate_token, .dot);
+        if (predicate_token.tag == .dot) {
+            if (subject.standalone) return;
+            return error.InvalidSyntax;
+        }
+        try self.parsePredicateObjectList(graph, subject.id, predicate_token, .dot);
     }
 
     fn parsePredicateObjectList(
@@ -497,15 +509,30 @@ const TurtleParser = struct {
         }) catch |err| return mapTermError(err);
     }
 
+    const ParsedSubject = struct {
+        id: rdf.TermId,
+        standalone: bool = false,
+    };
+
+    const ParsedPropertyList = struct {
+        id: rdf.TermId,
+        nonempty: bool,
+    };
+
     fn parseSubject(
         self: *TurtleParser,
         graph: *rdf.Graph,
         token: TurtleToken,
-    ) ParseError!rdf.TermId {
-        if (token.tag == .blank_node_label) return self.parseBlankNode(&graph.terms, token.lexeme);
-        if (token.tag == .left_bracket) return self.parseBlankNodePropertyList(graph);
-        if (token.tag == .left_parenthesis) return self.parseCollection(graph);
-        return self.parseResource(&graph.terms, token);
+    ) ParseError!ParsedSubject {
+        if (token.tag == .blank_node_label) return .{
+            .id = try self.parseBlankNode(&graph.terms, token.lexeme),
+        };
+        if (token.tag == .left_bracket) {
+            const property_list = try self.parseBlankNodePropertyList(graph);
+            return .{ .id = property_list.id, .standalone = property_list.nonempty };
+        }
+        if (token.tag == .left_parenthesis) return .{ .id = try self.parseCollection(graph) };
+        return .{ .id = try self.parseResource(&graph.terms, token) };
     }
 
     fn parseObject(
@@ -515,7 +542,7 @@ const TurtleParser = struct {
     ) ParseError!rdf.TermId {
         return switch (token.tag) {
             .blank_node_label => self.parseBlankNode(&graph.terms, token.lexeme),
-            .left_bracket => self.parseBlankNodePropertyList(graph),
+            .left_bracket => (try self.parseBlankNodePropertyList(graph)).id,
             .left_parenthesis => self.parseCollection(graph),
             .string_literal => self.parseStringLiteral(&graph.terms, token.lexeme),
             .integer => self.parseTypedLiteral(&graph.terms, token.lexeme, rdf.xsd_namespace ++ "integer"),
@@ -545,12 +572,12 @@ const TurtleParser = struct {
     fn parseBlankNodePropertyList(
         self: *TurtleParser,
         graph: *rdf.Graph,
-    ) ParseError!rdf.TermId {
+    ) ParseError!ParsedPropertyList {
         const blank_node = try self.freshBlankNode(&graph.terms);
         const first = try self.nextToken();
-        if (first.tag == .right_bracket) return blank_node;
+        if (first.tag == .right_bracket) return .{ .id = blank_node, .nonempty = false };
         try self.parsePredicateObjectList(graph, blank_node, first, .right_bracket);
-        return blank_node;
+        return .{ .id = blank_node, .nonempty = true };
     }
 
     fn parseCollection(self: *TurtleParser, graph: *rdf.Graph) ParseError!rdf.TermId {
@@ -736,24 +763,14 @@ const TurtleParser = struct {
 
     fn expandPrefixedName(self: *TurtleParser, value: []const u8) ParseError![]u8 {
         const colon = std.mem.indexOfScalar(u8, value, ':') orelse return error.InvalidSyntax;
+        if (!isPrefixLabel(value[0..colon])) return error.InvalidSyntax;
         const namespace = self.prefixes.get(value[0..colon]) orelse return error.InvalidSyntax;
         const local = value[colon + 1 ..];
-        if (local.len > 0 and (local[0] == '-' or local[local.len - 1] == '.')) {
-            return error.InvalidSyntax;
-        }
 
         var expanded: std.ArrayList(u8) = .empty;
         errdefer expanded.deinit(self.allocator);
         try expanded.appendSlice(self.allocator, namespace);
-        var index: usize = 0;
-        while (index < local.len) {
-            if (local[index] == '\\') {
-                index += 1;
-                if (index >= local.len or !isPnLocalEscaped(local[index])) return error.InvalidSyntax;
-            }
-            try expanded.append(self.allocator, local[index]);
-            index += 1;
-        }
+        try appendDecodedPnLocal(self.allocator, &expanded, local);
         return expanded.toOwnedSlice(self.allocator);
     }
 
@@ -811,12 +828,83 @@ fn classifyTurtleNumeric(value: []const u8) ?TurtleToken.Tag {
 
 fn isPrefixLabel(value: []const u8) bool {
     if (value.len == 0) return true;
-    if (!(std.ascii.isAlphabetic(value[0]) or value[0] == '_')) return false;
-    if (value[value.len - 1] == '.') return false;
-    for (value[1..]) |byte| {
-        if (!(std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-' or byte == '.')) return false;
+    var index: usize = 0;
+    const first = nextCodepoint(value, &index) orelse return false;
+    if (!isPnCharsBase(first)) return false;
+    var may_end = true;
+    while (index < value.len) {
+        const codepoint = nextCodepoint(value, &index) orelse return false;
+        if (codepoint == '.') {
+            may_end = false;
+        } else if (isPnChars(codepoint)) {
+            may_end = true;
+        } else {
+            return false;
+        }
     }
-    return true;
+    return may_end;
+}
+
+fn appendDecodedPnLocal(
+    allocator: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    value: []const u8,
+) ParseError!void {
+    var index: usize = 0;
+    var unit_index: usize = 0;
+    var may_end = value.len == 0;
+    while (index < value.len) : (unit_index += 1) {
+        if (value[index] == '\\') {
+            index += 1;
+            if (index >= value.len or !isPnLocalEscaped(value[index])) return error.InvalidSyntax;
+            try output.append(allocator, value[index]);
+            index += 1;
+            may_end = true;
+            continue;
+        }
+        if (value[index] == '%') {
+            if (value.len - index < 3 or
+                !std.ascii.isHex(value[index + 1]) or !std.ascii.isHex(value[index + 2]))
+            {
+                return error.InvalidSyntax;
+            }
+            try output.appendSlice(allocator, value[index .. index + 3]);
+            index += 3;
+            may_end = true;
+            continue;
+        }
+
+        const start = index;
+        const codepoint = nextCodepoint(value, &index) orelse return error.InvalidSyntax;
+        const allowed = if (unit_index == 0)
+            isPnCharsU(codepoint) or codepoint == ':' or (codepoint >= '0' and codepoint <= '9')
+        else
+            isPnChars(codepoint) or codepoint == '.' or codepoint == ':';
+        if (!allowed) return error.InvalidSyntax;
+        try output.appendSlice(allocator, value[start..index]);
+        may_end = codepoint != '.';
+    }
+    if (!may_end) return error.InvalidSyntax;
+}
+
+fn nextCodepoint(value: []const u8, index: *usize) ?u21 {
+    if (index.* >= value.len) return null;
+    const length = std.unicode.utf8ByteSequenceLength(value[index.*]) catch return null;
+    if (value.len - index.* < length) return null;
+    const codepoint = std.unicode.utf8Decode(value[index.* .. index.* + length]) catch return null;
+    index.* += length;
+    return codepoint;
+}
+
+fn isPnCharsU(codepoint: u21) bool {
+    return isPnCharsBase(codepoint) or codepoint == '_';
+}
+
+fn isPnChars(codepoint: u21) bool {
+    return isPnCharsU(codepoint) or codepoint == '-' or
+        (codepoint >= '0' and codepoint <= '9') or codepoint == 0x00b7 or
+        (codepoint >= 0x0300 and codepoint <= 0x036f) or
+        (codepoint >= 0x203f and codepoint <= 0x2040);
 }
 
 fn isPnLocalEscaped(byte: u8) bool {

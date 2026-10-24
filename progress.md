@@ -114,30 +114,28 @@ separate packages only after their APIs and release cycles become independently 
 - RDF collections now expand into `rdf:first`/`rdf:rest` chains ending in `rdf:nil`,
   including empty collections and nested collection/property-list items.
 - The local suite has 40 tests; all 157 official N-Triples and N-Quads syntax cases
-  continue to pass. Turtle conformance is not yet claimed.
+  continue to pass.
 - The official RDF 1.1 Turtle manifest and its action/result files are vendored at the
   same pinned W3C revision as the line-syntax suites.
 - The manifest runner executes all 313 Turtle syntax and evaluation entries. Evaluation
   uses RDF graph isomorphism so blank-node labels need not match.
-- The current Turtle baseline passes 295 cases and tracks 18 exact known failures; no
-  Turtle conformance claim is made while that list is non-empty.
+- All 313 official RDF 1.1 Turtle positive syntax, negative syntax, and evaluation cases
+  now pass with no exclusions.
 
 ## Milestone status
 
 - Milestone 1 — project skeleton and conventions: complete.
 - Milestone 2 — RDF 1.1 data model: substantially complete; API review remains.
 - Milestone 3 — N-Triples and N-Quads: complete.
-- Milestone 4 — Turtle and TriG: in progress; Turtle directive and IRI foundation is
-  implemented.
+- Milestone 4 — Turtle and TriG: in progress; Turtle parsing passes the complete official
+  manifest, while Turtle serialization and TriG remain.
 - Milestones 5–14: not started.
 
 ## Next actions
 
-1. Resolve the 18 explicit Turtle failures, beginning with prefixed-name and Unicode
-   name grammar.
-2. Correct the remaining blank-node structure and negative syntax cases.
-3. Reach all 313 Turtle cases before adding serialization and TriG
-   graph syntax.
+1. Design and implement deterministic Turtle serialization.
+2. Add parse/serialize/parse graph-isomorphism and allocation-failure coverage.
+3. Begin TriG graph syntax using the shared Turtle lexer and parser foundations.
 
 ## Session log
 
@@ -318,3 +316,15 @@ separate packages only after their APIs and release cycles become independently 
 - Established an executable baseline of 295 passing cases and 18 exact known failures;
   regressions and newly passing cases both require deliberate baseline updates.
 - Retained all 40 local tests and all 157 N-Triples/N-Quads cases.
+
+### 2026-10-24 — Turtle parser conformance
+
+- Made Turtle word scanning aware of escaped delimiters such as `\#`, `\,`, and `\;`.
+- Implemented the complete Unicode `PN_PREFIX`, `PN_LOCAL`, percent-escape, and reserved
+  local-name escape grammar while preserving percent escapes in expanded IRIs.
+- Reused the Unicode PN character classifier shared with blank-node label validation.
+- Required an alphabetic first character for RDF language tags.
+- Accepted standalone non-empty blank-node property lists while continuing to reject
+  standalone empty anonymous nodes.
+- Eliminated all 18 tracked failures and passed all 313 official Turtle cases with no
+  exclusions, alongside 40 local and 157 line-syntax cases.

@@ -495,7 +495,7 @@ fn isBlankNodeIdentifier(value: []const u8) bool {
 }
 
 fn isLanguageTag(value: []const u8) bool {
-    if (value.len == 0) return false;
+    if (value.len == 0 or !std.ascii.isAlphabetic(value[0])) return false;
     var previous_hyphen = true;
     for (value) |byte| {
         if (byte == '-') {
@@ -594,6 +594,7 @@ test "term constructors preserve RDF term distinctions at edge cases" {
     try std.testing.expectError(error.InvalidIri, pool.internNamedNode("1invalid:scheme"));
     try std.testing.expectError(error.InvalidIri, pool.internNamedNode("https://example.com/<bad>"));
     try std.testing.expectError(error.InvalidBlankNodeIdentifier, pool.internBlankNode("two words"));
+    try std.testing.expectError(error.InvalidLanguageTag, pool.internLanguageLiteral("hello", "1"));
     try std.testing.expectError(error.InvalidLanguageTag, pool.internLanguageLiteral("hello", "-en"));
     try std.testing.expectError(error.InvalidLanguageTag, pool.internLanguageLiteral("hello", "en-"));
 
