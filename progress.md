@@ -130,7 +130,7 @@ separate packages only after their APIs and release cycles become independently 
   same pinned W3C revision as the other RDF syntax suites.
 - The TriG manifest runner executes all 357 syntax and evaluation entries. Evaluation
   uses dataset isomorphism, including blank-node graph names.
-- The current TriG baseline is 352 passing cases and 5 exact expected failures. TriG
+- The current TriG baseline is 356 passing cases and one exact expected failure. TriG
   conformance is not yet claimed.
 - The local suite has 49 tests; all 470 previously integrated official cases continue
   to pass alongside the executable TriG baseline.
@@ -146,7 +146,7 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Reject directives inside graph blocks and resolve the minimal-whitespace TriG case.
+1. Diagnose and resolve the final minimal-whitespace TriG case.
 2. Reach a zero-exclusion pass of all 357 official TriG cases.
 3. Add deterministic expanded TriG serialization and dataset round-trip coverage.
 
@@ -390,4 +390,13 @@ separate packages only after their APIs and release cycles become independently 
   identity, and the preserved Turtle boundary.
 - Removed 14 cases from the executable failure baseline, leaving 352 of 357 official
   TriG cases passing and five exact failures.
+- Passed all 49 local tests and retained all 470 other official RDF cases.
+
+### 2026-10-24 — TriG directive scope
+
+- Restricted Turtle and SPARQL-style base and prefix directives to the TriG document
+  level, rejecting all directive forms inside graph blocks.
+- Added local negative coverage for all four directive spellings in graph blocks.
+- Removed four cases from the executable failure baseline, leaving 356 of 357 official
+  TriG cases passing and only the minimal-whitespace case unresolved.
 - Passed all 49 local tests and retained all 470 other official RDF cases.

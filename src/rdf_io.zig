@@ -557,10 +557,6 @@ const TurtleParser = struct {
             switch (first.tag) {
                 .right_brace => return,
                 .eof => return error.InvalidSyntax,
-                .at_base => try self.parseBaseDirective(true),
-                .base => try self.parseBaseDirective(false),
-                .at_prefix => try self.parsePrefixDirective(true),
-                .prefix => try self.parsePrefixDirective(false),
                 .iri_ref, .prefixed_name, .blank_node_label, .left_bracket, .left_parenthesis => try self.parseTriple(&target, first, .right_brace),
                 else => return error.InvalidSyntax,
             }
@@ -2104,6 +2100,10 @@ test "TriG rejects malformed graph blocks" {
         "@prefix ex: <https://example.com/> . GRAPH { ex:s ex:p ex:o . }",
         "@prefix ex: <https://example.com/> . \"literal\" { ex:s ex:p ex:o . }",
         "@prefix ex: <https://example.com/> . ex:g { ex:h { ex:s ex:p ex:o . } }",
+        "{ @base <https://example.com/> . }",
+        "{ BASE <https://example.com/> }",
+        "{ @prefix ex: <https://example.com/> . }",
+        "{ PREFIX ex: <https://example.com/> }",
         "}",
     };
     for (invalid) |input| {
