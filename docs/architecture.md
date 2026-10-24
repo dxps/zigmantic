@@ -87,3 +87,9 @@ N-Triples writer. This is a valid Turtle subset and avoids heuristic reconstruct
 prefix declarations, property lists, or collections from graph structure. The output is
 deterministic for a graph's iteration order and blank-node identifiers, but it is not an
 RDF graph canonicalization algorithm.
+
+Turtle and TriG share a `StatementTarget` abstraction over graphs and dataset graph
+selections. The lexer, directives, RDF term grammar, lists, collections, and blank-node
+scope remain single implementations; only statement routing differs. This keeps term
+identifiers in the final owner from the start and avoids copying between temporary
+graphs and datasets.

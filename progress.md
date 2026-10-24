@@ -124,6 +124,10 @@ separate packages only after their APIs and release cycles become independently 
 - Deterministic expanded Turtle serialization emits one absolute-IRI triple per line and
   round trips nested Turtle graphs stably without reconstructing syntactic shorthand.
 - The local suite has 43 tests; all 470 official RDF syntax/evaluation cases pass.
+- The first TriG parser slice routes shared Turtle grammar into default and named dataset
+  graphs, supporting compact graph blocks, `GRAPH` blocks, and blank-node graph names.
+- The local suite has 46 tests; all 470 currently integrated official cases continue to
+  pass. TriG conformance is not yet claimed.
 
 ## Milestone status
 
@@ -136,9 +140,9 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Begin TriG graph syntax using the shared Turtle lexer and parser foundations.
-2. Add named-graph blocks and default-graph blocks returning an owned dataset.
-3. Pin the official TriG suite and drive syntax/evaluation conformance.
+1. Pin the official RDF 1.1 TriG suite and add a manifest-driven runner.
+2. Use the resulting failures to complete graph-block punctuation and edge grammar.
+3. Add deterministic expanded TriG serialization and dataset round-trip coverage.
 
 ## Session log
 
@@ -344,3 +348,15 @@ separate packages only after their APIs and release cycles become independently 
   lists and collections.
 - Added exhaustive allocation-failure coverage for parsing and Turtle serialization.
 - Passed all 43 local tests and all 470 official RDF syntax/evaluation cases.
+
+### 2026-10-24 — TriG parser foundation
+
+- Added allocator-owned `parseTriG` dataset output with an optional external base IRI.
+- Generalized Turtle statement emission over graph and dataset graph targets without
+  duplicating its lexer, directives, term grammar, lists, or collections.
+- Added Turtle statements outside blocks and explicit default-graph blocks.
+- Added compact named-graph blocks and case-insensitive `GRAPH` blocks.
+- Supported IRI, prefixed-name, and labeled blank-node graph names.
+- Preserved document-wide blank-node identity across graph boundaries.
+- Added malformed-block and exhaustive dataset-routing allocation-failure coverage.
+- Passed all 46 local tests and retained all 470 integrated official cases.

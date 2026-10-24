@@ -7,6 +7,7 @@
 - `rdf_io.parseNTriples` returns an owned `rdf.Graph`.
 - `rdf_io.parseNQuads` returns an owned `rdf.Dataset`.
 - `rdf_io.parseTurtle` returns an owned `rdf.Graph`.
+- `rdf_io.parseTriG` returns an owned `rdf.Dataset`.
 - `rdf_io.serializeNTriplesAlloc` and `rdf_io.serializeNQuadsAlloc` return owned byte
   slices that the caller frees with the allocator passed to the function.
 - `rdf_io.serializeTurtleAlloc` likewise returns an allocator-owned byte slice.
@@ -59,6 +60,18 @@ and collections from their RDF graph expansion.
 Output follows graph iteration order. The serializer does not sort statements,
 canonicalize blank nodes, or promise byte-identical output for isomorphic graphs built
 with different ordering or blank-node identifiers.
+
+## TriG
+
+`parseTriG(allocator, input, options)` currently implements the first TriG parser slice
+and returns an owned dataset. It accepts Turtle statements in the default graph, `{ ...
+}` default-graph blocks, `name { ... }` named-graph blocks, and `GRAPH name { ... }`
+blocks. Graph names may be IRIs, prefixed names, or labeled blank nodes.
+
+Base and prefix declarations, RDF terms, property lists, collections, and blank-node
+identity use the same implementation and document scope as Turtle. The API follows the
+same ownership and `ParseError` conventions. TriG conformance is not yet claimed; the
+official manifest remains to be pinned and executed.
 
 ## IRI references
 
