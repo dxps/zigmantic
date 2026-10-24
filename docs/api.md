@@ -145,6 +145,22 @@ Expected operation costs, assuming ordinary hash-table behavior, are:
 - rollback: O(c), where c is the number of effective transaction changes;
 - compaction: O(n) time and O(n) temporary storage for n live quads.
 
+## Entailment materialization
+
+`entailment.Materialization` owns one RDF term pool and an indexed union of asserted and
+inferred triples. `fromGraph` copies an asserted graph into that independent ownership
+scope. `addAsserted` and `addInferred` keep set semantics; when an inferred triple is
+later asserted, its provenance is promoted without changing union iteration order.
+
+`iterator(.asserted)`, `iterator(.inferred)`, and `iterator(.all)` expose deterministic,
+allocation-free views of the two provenance partitions or their union. The materialized
+union is intentionally separate from the input graph: inference never silently mutates
+the caller's assertions.
+
+This API is infrastructure for forward rule application. By itself it does not claim
+that RDF or RDFS closure has been reached; conformance belongs to the rule sets layered
+on top of it.
+
 ## IRI references
 
 `iri.resolveAlloc(allocator, base, reference)` returns an owned absolute IRI using the

@@ -143,7 +143,9 @@ separate packages only after their APIs and release cycles become independently 
   rollback, eager read visibility, and allocation-free undo.
 - Explicit failure-atomic compaction reclaims tombstoned slots and stale postings while
   preserving live order and every term identifier.
-- The local suite has 65 tests; all 827 integrated official RDF cases pass.
+- The public `entailment` module now has an owned materialization boundary with a shared
+  term scope, indexed union, and distinct asserted/inferred provenance.
+- The local suite has 69 tests; all 827 integrated official RDF cases pass.
 
 ## Milestone status
 
@@ -152,12 +154,14 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 3 — N-Triples and N-Quads: complete.
 - Milestone 4 — Turtle and TriG: complete.
 - Milestone 5 — indexed in-memory quad store: complete.
-- Milestones 6–14: not started.
+- Milestone 6 — RDF/RDFS semantics and entailment: in progress; the materialization
+  boundary is implemented, while RDF and RDFS rule layers remain.
+- Milestones 7–14: not started.
 
 ## Next actions
 
-1. Establish the entailment module's asserted/inferred graph boundary and closure API.
-2. Implement RDF entailment rules and vocabulary axioms with focused semantic tests.
+1. Implement RDF entailment rules and vocabulary axioms with focused semantic tests.
+2. Pin and integrate the official RDF model-theory entailment suite.
 3. Extend the rule engine to RDFS entailment and standard test coverage.
 
 ## Session log
@@ -488,3 +492,16 @@ separate packages only after their APIs and release cycles become independently 
   allocation-failure coverage.
 - Completed the indexed-store milestone with 65 local tests and all 827 official RDF
   conformance cases passing.
+
+### 2026-10-24 — Entailment materialization boundary
+
+- Added the public `entailment` module and allocator-owned `Materialization` type.
+- Copied asserted graphs into an independent shared term scope backed by the indexed
+  store's default graph.
+- Tracked asserted provenance separately from inferred triples while retaining one
+  set-semantic union.
+- Added deterministic allocation-free iteration over asserted, inferred, or all triples.
+- Defined promotion from inferred to asserted without duplication or reordering.
+- Added provenance, promotion, source-ownership, and exhaustive allocation-failure
+  coverage without claiming RDF or RDFS closure prematurely.
+- Passed all 69 local tests and retained all 827 official RDF conformance cases.

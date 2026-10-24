@@ -129,3 +129,16 @@ Compaction builds an independent temporary slot/index set and swaps it into the 
 only after every live quad is indexed successfully. Failure therefore leaves the
 original representation and logical contents untouched. The term pool is not rebuilt,
 so all `TermId` values and term views remain valid across compaction.
+
+## Entailment boundary
+
+Forward inference uses an explicit `Materialization` rather than modifying an asserted
+`Graph`. The materialization copies source terms into one owned pool, stores the union
+in the indexed store's default graph, and maintains a separate exact set for asserted
+provenance. A triple occurring through both paths is represented once and classified as
+asserted.
+
+Rule layers may iterate the union and add inferred triples until a fixed point, while
+callers can still inspect asserted and inferred partitions independently. This reflects
+the RDF 1.1 Semantics distinction between valid entailment and an application's optional
+choice to construct entailed graphs.
