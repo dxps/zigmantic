@@ -110,8 +110,8 @@ the usual case.
 
 Deletion marks a slot inactive and removes it from the exact-quad index. Posting lists
 retain stale slot numbers, which avoids renumbering and preserves deterministic order;
-iterators skip inactive slots. Reinsertion receives a new slot at the end. A later
-compaction API may rebuild slots and indexes explicitly, but ordinary removal never
+iterators skip inactive slots. Reinsertion receives a new slot at the end. Explicit
+compaction rebuilds slots and every index from live quads, but ordinary removal never
 changes the relative order of live quads.
 
 Insertion updates every index transactionally at the operation level. Allocation
@@ -124,3 +124,8 @@ blocked. An insertion or removal is appended to the undo log only after reservin
 capacity. Rollback walks that log backward: additions become tombstones, while removals
 reactivate their original slots and exact-quad entries using already-reserved hash-map
 capacity. Consequently rollback itself does not allocate and restores original order.
+
+Compaction builds an independent temporary slot/index set and swaps it into the store
+only after every live quad is indexed successfully. Failure therefore leaves the
+original representation and logical contents untouched. The term pool is not rebuilt,
+so all `TermId` values and term views remain valid across compaction.

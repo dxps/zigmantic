@@ -131,6 +131,20 @@ its undo log in reverse without allocating. Deinitializing an active transaction
 it back automatically. The transaction must be deinitialized before its store, and a
 closed transaction rejects further operations.
 
+`slotCount` reports live plus tombstoned slots and `tombstoneCount` reports reclaimable
+slots. `compact` rebuilds slots and all indexes from live quads, preserving their order
+and every term identifier. It is rejected during a transaction. Allocation failure
+leaves the original store unchanged; successful compaction invalidates iterators.
+
+Expected operation costs, assuming ordinary hash-table behavior, are:
+
+- insertion, exact membership, and removal: amortized O(1), excluding term interning;
+- bound iteration: O(k), where k is the shortest selected posting list including stale
+  entries not yet compacted;
+- unbound iteration: O(s), where s is the current slot count;
+- rollback: O(c), where c is the number of effective transaction changes;
+- compaction: O(n) time and O(n) temporary storage for n live quads.
+
 ## IRI references
 
 `iri.resolveAlloc(allocator, base, reference)` returns an owned absolute IRI using the

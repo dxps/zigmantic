@@ -141,7 +141,9 @@ separate packages only after their APIs and release cycles become independently 
   set semantics and subject, predicate, object, and graph posting indexes.
 - Store transactions provide enforced single-writer commit, explicit or automatic
   rollback, eager read visibility, and allocation-free undo.
-- The local suite has 63 tests; all 827 integrated official RDF cases pass.
+- Explicit failure-atomic compaction reclaims tombstoned slots and stale postings while
+  preserving live order and every term identifier.
+- The local suite has 65 tests; all 827 integrated official RDF cases pass.
 
 ## Milestone status
 
@@ -149,15 +151,14 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 2 — RDF 1.1 data model: complete.
 - Milestone 3 — N-Triples and N-Quads: complete.
 - Milestone 4 — Turtle and TriG: complete.
-- Milestone 5 — indexed in-memory quad store: in progress; indexing and transactions
-  are implemented, while explicit compaction and the final API audit remain.
+- Milestone 5 — indexed in-memory quad store: complete.
 - Milestones 6–14: not started.
 
 ## Next actions
 
-1. Add explicit index compaction and stale-slot reclamation.
-2. Complete the store complexity and mutation-guarantee audit.
-3. Begin RDF and RDFS entailment after the store milestone closes.
+1. Establish the entailment module's asserted/inferred graph boundary and closure API.
+2. Implement RDF entailment rules and vocabulary axioms with focused semantic tests.
+3. Extend the rule engine to RDFS entailment and standard test coverage.
 
 ## Session log
 
@@ -474,3 +475,16 @@ separate packages only after their APIs and release cycles become independently 
 - Added commit, rollback ordering, mutation exclusion, automatic rollback, closed-state,
   and exhaustive allocation-failure coverage.
 - Passed all 63 local tests and retained all 827 official RDF conformance cases.
+
+### 2026-10-24 — Store compaction and API audit
+
+- Added live-slot and tombstone metrics for callers deciding when to reclaim storage.
+- Added explicit compaction that rebuilds live slots, exact membership, and all four
+  posting indexes while preserving deterministic live order and term identifiers.
+- Made compaction failure-atomic by building replacement storage before swapping it into
+  the store, and rejected compaction during active transactions.
+- Documented expected insertion, removal, query, rollback, and compaction complexity.
+- Added indexed-order, stale-slot reclamation, transaction exclusion, and exhaustive
+  allocation-failure coverage.
+- Completed the indexed-store milestone with 65 local tests and all 827 official RDF
+  conformance cases passing.

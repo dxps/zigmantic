@@ -77,6 +77,15 @@ pub const Store = struct {
         const key = quadKey(quad);
         if (self.active_quads.contains(key)) return false;
 
+        try self.appendIndexed(quad, key);
+        return true;
+    }
+
+    fn appendIndexed(
+        self: *Store,
+        quad: rdf.Quad,
+        key: QuadKey,
+    ) std.mem.Allocator.Error!void {
         const slot_index = self.slots.items.len;
         try self.slots.append(self.allocator, .{ .quad = quad });
         errdefer _ = self.slots.pop();
@@ -144,7 +153,6 @@ pub const Store = struct {
 
         try self.active_quads.put(self.allocator, key, slot_index);
         self.live_count += 1;
-        return true;
     }
 
     /// Removes an exact quad. Slots and posting-list positions remain stable so existing
@@ -169,6 +177,42 @@ pub const Store = struct {
 
     pub fn len(self: *const Store) usize {
         return self.live_count;
+    }
+
+    /// Returns live and removed slots currently retained by the store.
+    pub fn slotCount(self: *const Store) usize {
+        return self.slots.items.len;
+    }
+
+    pub fn tombstoneCount(self: *const Store) usize {
+        return self.slots.items.len - self.live_count;
+    }
+
+    /// Rebuilds slots and indexes using only live quads. Failure leaves the original
+    /// store unchanged. Live iteration order and term identifiers are preserved.
+    pub fn compact(self: *Store) Error!void {
+        if (self.transaction_active) return error.TransactionActive;
+        if (self.tombstoneCount() == 0) return;
+
+        var rebuilt = Store.init(self.allocator);
+        errdefer rebuilt.deinit();
+        for (self.slots.items) |slot| {
+            if (!slot.active) continue;
+            try rebuilt.appendIndexed(slot.quad, quadKey(slot.quad));
+        }
+
+        std.mem.swap(std.ArrayList(Slot), &self.slots, &rebuilt.slots);
+        std.mem.swap(
+            std.AutoHashMapUnmanaged(QuadKey, usize),
+            &self.active_quads,
+            &rebuilt.active_quads,
+        );
+        std.mem.swap(TermIndex, &self.subject_index, &rebuilt.subject_index);
+        std.mem.swap(TermIndex, &self.predicate_index, &rebuilt.predicate_index);
+        std.mem.swap(TermIndex, &self.object_index, &rebuilt.object_index);
+        std.mem.swap(GraphIndex, &self.graph_index, &rebuilt.graph_index);
+        std.mem.swap(usize, &self.live_count, &rebuilt.live_count);
+        rebuilt.deinit();
     }
 
     /// Begins the store's only active transaction. Tentative changes are visible to
@@ -425,6 +469,40 @@ test "store removal and reinsertion retain deterministic live order" {
     try std.testing.expectEqual(@as(?rdf.Quad, null), all.next());
 }
 
+test "store compaction reclaims tombstones and preserves indexed order" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const subject = try store.terms.internNamedNode("https://example.com/subject");
+    const predicate = try store.terms.internNamedNode("https://example.com/predicate");
+    const first_object = try store.terms.internSimpleLiteral("first");
+    const removed_object = try store.terms.internSimpleLiteral("removed");
+    const third_object = try store.terms.internSimpleLiteral("third");
+    const last_object = try store.terms.internSimpleLiteral("last");
+    const first = rdf.Quad{ .subject = subject, .predicate = predicate, .object = first_object };
+    const removed = rdf.Quad{ .subject = subject, .predicate = predicate, .object = removed_object };
+    const third = rdf.Quad{ .subject = subject, .predicate = predicate, .object = third_object };
+    const last = rdf.Quad{ .subject = subject, .predicate = predicate, .object = last_object };
+    _ = try store.add(first);
+    _ = try store.add(removed);
+    _ = try store.add(third);
+    try std.testing.expect(try store.remove(removed));
+    _ = try store.add(last);
+    try std.testing.expectEqual(@as(usize, 4), store.slotCount());
+    try std.testing.expectEqual(@as(usize, 1), store.tombstoneCount());
+
+    try store.compact();
+    try std.testing.expectEqual(@as(usize, 3), store.slotCount());
+    try std.testing.expectEqual(@as(usize, 0), store.tombstoneCount());
+    try std.testing.expect(!store.contains(removed));
+
+    var matches = store.iterator(.{ .subject = subject });
+    try std.testing.expectEqual(first, matches.next().?);
+    try std.testing.expectEqual(third, matches.next().?);
+    try std.testing.expectEqual(last, matches.next().?);
+    try std.testing.expectEqual(@as(?rdf.Quad, null), matches.next());
+}
+
 test "store transaction commit is atomic and excludes direct mutation" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
@@ -442,6 +520,7 @@ test "store transaction commit is atomic and excludes direct mutation" {
     try std.testing.expectError(error.TransactionActive, store.beginTransaction());
     try std.testing.expectError(error.TransactionActive, store.add(second));
     try std.testing.expectError(error.TransactionActive, store.remove(first));
+    try std.testing.expectError(error.TransactionActive, store.compact());
     try std.testing.expect(try transaction.remove(first));
     try std.testing.expect(try transaction.add(second));
     try std.testing.expect(!store.contains(first));
@@ -543,6 +622,30 @@ test "store transaction handles every allocation failure atomically" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         exerciseTransactionAllocations,
+        .{},
+    );
+}
+
+fn exerciseCompactionAllocations(allocator: std.mem.Allocator) !void {
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    const subject = try store.terms.internNamedNode("https://example.com/subject");
+    const predicate = try store.terms.internNamedNode("https://example.com/predicate");
+    const first_object = try store.terms.internSimpleLiteral("first");
+    const second_object = try store.terms.internSimpleLiteral("second");
+    const first = rdf.Quad{ .subject = subject, .predicate = predicate, .object = first_object };
+    const second = rdf.Quad{ .subject = subject, .predicate = predicate, .object = second_object };
+    _ = try store.add(first);
+    _ = try store.add(second);
+    _ = try store.remove(first);
+    try store.compact();
+}
+
+test "store compaction handles every allocation failure atomically" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseCompactionAllocations,
         .{},
     );
 }
