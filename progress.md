@@ -157,8 +157,9 @@ separate packages only after their APIs and release cycles become independently 
   a transactional fixed point for ordinary RDF triples.
 - Mandatory `xsd:string` and `rdf:langString` consistency detects malformed language
   strings and disjoint RDFS range constraints without recognizing optional datatypes.
-- Manifest-declared profiles now enable `xsd:integer`, `xsd:int`, and initial
-  `rdf:XMLLiteral` lexical, value-space, and range consistency checks.
+- Manifest-declared profiles now enable `xsd:integer`, `xsd:int`, and
+  `rdf:XMLLiteral` lexical, value-space, and range consistency checks; XML literal
+  lexical validation covers well-balanced XML 1.0 content and XML Namespaces 1.0.
 - Recognized `xsd:decimal`, `xsd:float`, and `xsd:double` values now compare by semantic
   value, including decimal canonicalization and IEEE-754 rounding behavior.
 - Virtual generalized datatype facts now support `rdfD1` existential conclusions
@@ -171,7 +172,7 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 95 tests; all 827 integrated syntax/evaluation cases still pass.
+- The local suite has 100 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -189,10 +190,9 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Complete XMLLiteral validation with a standards-compliant XML parser.
-2. Audit generalized RDF intermediate requirements and normative semantics beyond
+1. Audit generalized RDF intermediate requirements and normative semantics beyond
    the official suite before declaring milestone 6 complete.
-3. Add fuzzing for entailment matching and rule-closure invariants.
+2. Add fuzzing for entailment matching and rule-closure invariants.
 
 ## Session log
 
@@ -670,3 +670,20 @@ separate packages only after their APIs and release cycles become independently 
   swallowed errors while leaving caller-owned graphs unchanged.
 - Passed all 48 model-theory cases, 827 syntax/evaluation cases, and 95 local tests;
   the complete build now runs 100 tests.
+
+### 2026-10-24 — Complete XMLLiteral lexical validation
+
+- Replaced the conservative delimiter scan with a pure Zig, allocation-safe XML 1.0
+  content parser supporting nested and empty elements, attributes, character and
+  predefined entity references, comments, CDATA sections, and processing instructions.
+- Enforced self-contained XML Namespaces 1.0 semantics, including QName grammar,
+  scoped prefix declarations, reserved namespace bindings, normalized namespace
+  values, and expanded-name attribute uniqueness.
+- Rejected declarations and DTD constructs that are not XML content, invalid UTF-8 or
+  XML characters, unbound prefixes, malformed markup, and unbalanced elements.
+- Made datatype consistency allocation-aware so XML parser allocation failures
+  propagate through public consistency and entailment APIs without being mistaken for
+  ill-typed literals.
+- Added focused positive, negative, namespace, and exhaustive allocation-failure tests.
+- Passed all 48 model-theory cases, 827 syntax/evaluation cases, and 100 local tests;
+  the complete build now runs 105 tests.

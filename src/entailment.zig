@@ -3,6 +3,7 @@
 const std = @import("std");
 const rdf = @import("rdf.zig");
 const store_mod = @import("store.zig");
+const xml_literal = @import("xml_literal.zig");
 
 const TripleKey = struct {
     subject: u32,
@@ -140,7 +141,7 @@ pub fn entailsGraph(
     defer materialization.deinit();
     try materializeForRegime(&materialization, conclusion, options.regime);
     if (options.regime != .simple and
-        !isDatatypeConsistent(&materialization, options.datatypes))
+        !try isDatatypeConsistent(&materialization, options.datatypes))
     {
         return true;
     }
@@ -663,7 +664,7 @@ const DatatypeKind = enum {
 pub fn isDatatypeConsistent(
     materialization: *const Materialization,
     profile: DatatypeProfile,
-) bool {
+) std.mem.Allocator.Error!bool {
     const pool = materialization.termPoolConst();
     var facts = materialization.iterator(.all);
     while (facts.next()) |fact| {
@@ -672,7 +673,7 @@ pub fn isDatatypeConsistent(
             .literal => |value| value,
             else => continue,
         };
-        if (!isLiteralWellTyped(literal, profile)) return false;
+        if (!try isLiteralWellTyped(materialization.allocator, literal, profile)) return false;
 
         var constraints = materialization.iterator(.all);
         while (constraints.next()) |constraint| {
@@ -691,7 +692,7 @@ pub fn isDatatypeConsistent(
                 .named_node => |iri| iri,
                 else => continue,
             };
-            if (datatypeMembership(literal, range_iri, profile)) |belongs| {
+            if (try datatypeMembership(materialization.allocator, literal, range_iri, profile)) |belongs| {
                 if (!belongs) return false;
             }
         }
@@ -699,11 +700,17 @@ pub fn isDatatypeConsistent(
     return true;
 }
 
-pub fn isMandatoryDatatypeConsistent(materialization: *const Materialization) bool {
+pub fn isMandatoryDatatypeConsistent(
+    materialization: *const Materialization,
+) std.mem.Allocator.Error!bool {
     return isDatatypeConsistent(materialization, .{});
 }
 
-fn isLiteralWellTyped(literal: rdf.LiteralView, profile: DatatypeProfile) bool {
+fn isLiteralWellTyped(
+    allocator: std.mem.Allocator,
+    literal: rdf.LiteralView,
+    profile: DatatypeProfile,
+) std.mem.Allocator.Error!bool {
     const kind = datatypeKind(literal.datatype, profile) orelse return true;
     return switch (kind) {
         .xsd_string => literal.language == null,
@@ -713,18 +720,27 @@ fn isLiteralWellTyped(literal: rdf.LiteralView, profile: DatatypeProfile) bool {
         .xsd_decimal => parseDecimal(literal.lexical_form) != null,
         .xsd_float => parseXsdFloat(f32, literal.lexical_form) != null,
         .xsd_double => parseXsdFloat(f64, literal.lexical_form) != null,
-        .rdf_xml_literal => isSupportedXmlLiteralLexical(literal.lexical_form),
+        .rdf_xml_literal => xml_literal.validate(allocator, literal.lexical_form),
     };
 }
 
 fn datatypeMembership(
+    allocator: std.mem.Allocator,
     literal: rdf.LiteralView,
     datatype: []const u8,
     profile: DatatypeProfile,
-) ?bool {
+) std.mem.Allocator.Error!?bool {
     const target = datatypeKind(datatype, profile) orelse return null;
     const source = datatypeKind(literal.datatype, profile) orelse return null;
-    if (!isLiteralWellTyped(literal, profile)) return false;
+    if (!try isLiteralWellTyped(allocator, literal, profile)) return false;
+    return datatypeMembershipValue(literal, source, target);
+}
+
+fn datatypeMembershipValue(
+    literal: rdf.LiteralView,
+    source: DatatypeKind,
+    target: DatatypeKind,
+) bool {
     return switch (source) {
         .xsd_string => target == .xsd_string and literal.language == null,
         .rdf_lang_string => target == .rdf_lang_string and literal.language != null,
@@ -770,7 +786,8 @@ pub fn recognizedLiteralValuesEqual(
 ) ?bool {
     const left_kind = datatypeKind(left.datatype, profile) orelse return null;
     const right_kind = datatypeKind(right.datatype, profile) orelse return null;
-    if (!isLiteralWellTyped(left, profile) or !isLiteralWellTyped(right, profile)) return false;
+    if (!isLiteralWellTypedWithoutXml(left, profile) or
+        !isLiteralWellTypedWithoutXml(right, profile)) return false;
 
     if (isDecimalKind(left_kind) and isDecimalKind(right_kind)) {
         return decimalValuesEqual(left.lexical_form, right.lexical_form);
@@ -797,7 +814,24 @@ pub fn recognizedLiteralBelongsTo(
     datatype_iri: []const u8,
     profile: DatatypeProfile,
 ) ?bool {
-    return datatypeMembership(literal, datatype_iri, profile);
+    const target = datatypeKind(datatype_iri, profile) orelse return null;
+    const source = datatypeKind(literal.datatype, profile) orelse return null;
+    if (!isLiteralWellTypedWithoutXml(literal, profile)) return false;
+    return datatypeMembershipValue(literal, source, target);
+}
+
+fn isLiteralWellTypedWithoutXml(literal: rdf.LiteralView, profile: DatatypeProfile) bool {
+    const kind = datatypeKind(literal.datatype, profile) orelse return true;
+    return switch (kind) {
+        .xsd_string => literal.language == null,
+        .rdf_lang_string => literal.language != null,
+        .xsd_integer => isIntegerLexical(literal.lexical_form),
+        .xsd_int => isIntLexical(literal.lexical_form),
+        .xsd_decimal => parseDecimal(literal.lexical_form) != null,
+        .xsd_float => parseXsdFloat(f32, literal.lexical_form) != null,
+        .xsd_double => parseXsdFloat(f64, literal.lexical_form) != null,
+        .rdf_xml_literal => true,
+    };
 }
 
 fn isDecimalKind(kind: DatatypeKind) bool {
@@ -931,31 +965,6 @@ fn isIntLexical(lexical: []const u8) bool {
 
 fn integerFitsInt(lexical: []const u8) bool {
     return isIntLexical(lexical);
-}
-
-fn isSupportedXmlLiteralLexical(lexical: []const u8) bool {
-    var index: usize = 0;
-    while (index < lexical.len) {
-        if (lexical[index] == '<') {
-            if (index + 1 == lexical.len) return false;
-            const next = lexical[index + 1];
-            if (!(next == '/' or next == '?' or next == '!' or next == '_' or
-                std.ascii.isAlphabetic(next) or next >= 0x80)) return false;
-            const close = std.mem.indexOfScalarPos(u8, lexical, index + 2, '>') orelse
-                return false;
-            index = close + 1;
-            continue;
-        }
-        if (lexical[index] == '&') {
-            const close = std.mem.indexOfScalarPos(u8, lexical, index + 1, ';') orelse
-                return false;
-            if (close == index + 1) return false;
-            index = close + 1;
-            continue;
-        }
-        index += 1;
-    }
-    return true;
 }
 
 fn materializationEntails(
@@ -1522,7 +1531,7 @@ test "mandatory datatype consistency detects disjoint RDFS literal ranges" {
         .object = value,
     });
 
-    try std.testing.expect(!isMandatoryDatatypeConsistent(&materialization));
+    try std.testing.expect(!try isMandatoryDatatypeConsistent(&materialization));
 }
 
 test "mandatory datatype consistency accepts matching language values" {
@@ -1545,7 +1554,7 @@ test "mandatory datatype consistency accepts matching language values" {
         .object = value,
     });
 
-    try std.testing.expect(isMandatoryDatatypeConsistent(&materialization));
+    try std.testing.expect(try isMandatoryDatatypeConsistent(&materialization));
 }
 
 test "rdf:langString without a language tag is inconsistent" {
@@ -1561,7 +1570,7 @@ test "rdf:langString without a language tag is inconsistent" {
         .object = invalid,
     });
 
-    try std.testing.expect(!isMandatoryDatatypeConsistent(&materialization));
+    try std.testing.expect(!try isMandatoryDatatypeConsistent(&materialization));
 }
 
 test "optional integer datatypes validate only when explicitly recognized" {
@@ -1577,8 +1586,8 @@ test "optional integer datatypes validate only when explicitly recognized" {
         .object = invalid,
     });
 
-    try std.testing.expect(isDatatypeConsistent(&materialization, .{}));
-    try std.testing.expect(!isDatatypeConsistent(&materialization, .{ .xsd_integer = true }));
+    try std.testing.expect(try isDatatypeConsistent(&materialization, .{}));
+    try std.testing.expect(!try isDatatypeConsistent(&materialization, .{ .xsd_integer = true }));
 }
 
 test "integer lexical spaces and xsd:int bounds are exact" {
@@ -1613,7 +1622,7 @@ test "recognized integer subtype ranges detect incompatible values" {
         .object = value,
     });
 
-    try std.testing.expect(!isDatatypeConsistent(&materialization, .{
+    try std.testing.expect(!try isDatatypeConsistent(&materialization, .{
         .xsd_integer = true,
         .xsd_int = true,
     }));
@@ -1632,8 +1641,8 @@ test "recognized XMLLiteral rejects incomplete markup" {
         .object = invalid,
     });
 
-    try std.testing.expect(isDatatypeConsistent(&materialization, .{}));
-    try std.testing.expect(!isDatatypeConsistent(&materialization, .{
+    try std.testing.expect(try isDatatypeConsistent(&materialization, .{}));
+    try std.testing.expect(!try isDatatypeConsistent(&materialization, .{
         .rdf_xml_literal = true,
     }));
 }
@@ -1995,6 +2004,30 @@ test "consistency checking handles every allocation failure without leaks" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         exerciseConsistencyAllocations,
+        .{},
+    );
+}
+
+fn exerciseXmlLiteralConsistencyAllocations(allocator: std.mem.Allocator) !void {
+    var premise = rdf.Graph.init(allocator);
+    defer premise.deinit();
+    const subject = try premise.terms.internNamedNode("https://example.com/subject");
+    const predicate = try premise.terms.internNamedNode("https://example.com/predicate");
+    const literal = try premise.terms.internTypedLiteral(
+        "<p:a xmlns:p='urn:x' p:value='ok'><p:b/></p:a>",
+        rdf.rdf_xml_literal,
+    );
+    _ = try premise.add(.{ .subject = subject, .predicate = predicate, .object = literal });
+    if (!try isGraphConsistent(allocator, &premise, .{
+        .regime = .rdf,
+        .datatypes = .{ .rdf_xml_literal = true },
+    })) return error.TestUnexpectedResult;
+}
+
+test "XMLLiteral consistency handles every allocation failure without leaks" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseXmlLiteralConsistencyAllocations,
         .{},
     );
 }
