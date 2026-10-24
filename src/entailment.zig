@@ -1797,6 +1797,208 @@ test "public RDF entailment exposes rdfD1 through an existential conclusion" {
     ));
 }
 
+test "simple entailment backtracks blank-node mappings" {
+    var premise = rdf.Graph.init(std.testing.allocator);
+    defer premise.deinit();
+    const a = try premise.terms.internNamedNode("https://example.com/a");
+    const b = try premise.terms.internNamedNode("https://example.com/b");
+    const c = try premise.terms.internNamedNode("https://example.com/c");
+    const d = try premise.terms.internNamedNode("https://example.com/d");
+    const p = try premise.terms.internNamedNode("https://example.com/p");
+    const q = try premise.terms.internNamedNode("https://example.com/q");
+    _ = try premise.add(.{ .subject = a, .predicate = p, .object = b });
+    _ = try premise.add(.{ .subject = c, .predicate = p, .object = b });
+    _ = try premise.add(.{ .subject = c, .predicate = q, .object = d });
+
+    var conclusion = rdf.Graph.init(std.testing.allocator);
+    defer conclusion.deinit();
+    const x = try conclusion.terms.internBlankNode("x");
+    const conclusion_b = try conclusion.terms.internNamedNode("https://example.com/b");
+    const conclusion_d = try conclusion.terms.internNamedNode("https://example.com/d");
+    const conclusion_p = try conclusion.terms.internNamedNode("https://example.com/p");
+    const conclusion_q = try conclusion.terms.internNamedNode("https://example.com/q");
+    _ = try conclusion.add(.{ .subject = x, .predicate = conclusion_p, .object = conclusion_b });
+    _ = try conclusion.add(.{ .subject = x, .predicate = conclusion_q, .object = conclusion_d });
+
+    try std.testing.expect(try entailsGraph(
+        std.testing.allocator,
+        &premise,
+        &conclusion,
+        .{ .regime = .simple },
+    ));
+}
+
+test "simple entailment permits non-injective cyclic blank-node mappings" {
+    var premise = rdf.Graph.init(std.testing.allocator);
+    defer premise.deinit();
+    const a = try premise.terms.internNamedNode("https://example.com/a");
+    const predicate = try premise.terms.internNamedNode("https://example.com/p");
+    _ = try premise.add(.{ .subject = a, .predicate = predicate, .object = a });
+
+    var conclusion = rdf.Graph.init(std.testing.allocator);
+    defer conclusion.deinit();
+    const x = try conclusion.terms.internBlankNode("x");
+    const y = try conclusion.terms.internBlankNode("y");
+    const conclusion_predicate = try conclusion.terms.internNamedNode("https://example.com/p");
+    _ = try conclusion.add(.{ .subject = x, .predicate = conclusion_predicate, .object = y });
+    _ = try conclusion.add(.{ .subject = y, .predicate = conclusion_predicate, .object = x });
+
+    try std.testing.expect(try entailsGraph(
+        std.testing.allocator,
+        &premise,
+        &conclusion,
+        .{ .regime = .simple },
+    ));
+}
+
+test "simple entailment rejects inconsistent shared blank-node mappings" {
+    var premise = rdf.Graph.init(std.testing.allocator);
+    defer premise.deinit();
+    const a = try premise.terms.internNamedNode("https://example.com/a");
+    const b = try premise.terms.internNamedNode("https://example.com/b");
+    const c = try premise.terms.internNamedNode("https://example.com/c");
+    const d = try premise.terms.internNamedNode("https://example.com/d");
+    const predicate = try premise.terms.internNamedNode("https://example.com/p");
+    _ = try premise.add(.{ .subject = a, .predicate = predicate, .object = b });
+    _ = try premise.add(.{ .subject = c, .predicate = predicate, .object = d });
+
+    var conclusion = rdf.Graph.init(std.testing.allocator);
+    defer conclusion.deinit();
+    const x = try conclusion.terms.internBlankNode("x");
+    const conclusion_b = try conclusion.terms.internNamedNode("https://example.com/b");
+    const conclusion_d = try conclusion.terms.internNamedNode("https://example.com/d");
+    const conclusion_predicate = try conclusion.terms.internNamedNode("https://example.com/p");
+    _ = try conclusion.add(.{ .subject = x, .predicate = conclusion_predicate, .object = conclusion_b });
+    _ = try conclusion.add(.{ .subject = x, .predicate = conclusion_predicate, .object = conclusion_d });
+
+    try std.testing.expect(!(try entailsGraph(
+        std.testing.allocator,
+        &premise,
+        &conclusion,
+        .{ .regime = .simple },
+    )));
+}
+
+fn exerciseSimpleEntailmentAllocations(allocator: std.mem.Allocator) !void {
+    var premise = rdf.Graph.init(allocator);
+    defer premise.deinit();
+    const subject = try premise.terms.internNamedNode("https://example.com/subject");
+    const predicate = try premise.terms.internNamedNode("https://example.com/predicate");
+    const object = try premise.terms.internNamedNode("https://example.com/object");
+    _ = try premise.add(.{ .subject = subject, .predicate = predicate, .object = object });
+
+    var conclusion = rdf.Graph.init(allocator);
+    defer conclusion.deinit();
+    const blank = try conclusion.terms.internBlankNode("value");
+    const conclusion_predicate = try conclusion.terms.internNamedNode("https://example.com/predicate");
+    const conclusion_object = try conclusion.terms.internNamedNode("https://example.com/object");
+    _ = try conclusion.add(.{
+        .subject = blank,
+        .predicate = conclusion_predicate,
+        .object = conclusion_object,
+    });
+    if (!try entailsGraph(allocator, &premise, &conclusion, .{ .regime = .simple })) {
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "simple entailment handles every allocation failure without leaks" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseSimpleEntailmentAllocations,
+        .{},
+    );
+}
+
+fn exerciseRdfEntailmentAllocations(allocator: std.mem.Allocator) !void {
+    var premise = rdf.Graph.init(allocator);
+    defer premise.deinit();
+    const subject = try premise.terms.internNamedNode("https://example.com/subject");
+    const predicate = try premise.terms.internNamedNode("https://example.com/predicate");
+    const literal = try premise.terms.internTypedLiteral("42", rdf.xsd_integer);
+    _ = try premise.add(.{ .subject = subject, .predicate = predicate, .object = literal });
+
+    var conclusion = rdf.Graph.init(allocator);
+    defer conclusion.deinit();
+    const conclusion_subject = try conclusion.terms.internNamedNode("https://example.com/subject");
+    const conclusion_predicate = try conclusion.terms.internNamedNode("https://example.com/predicate");
+    const value = try conclusion.terms.internBlankNode("value");
+    _ = try conclusion.add(.{
+        .subject = conclusion_subject,
+        .predicate = conclusion_predicate,
+        .object = value,
+    });
+    if (!try entailsGraph(allocator, &premise, &conclusion, .{
+        .regime = .rdf,
+        .datatypes = .{ .xsd_integer = true },
+    })) return error.TestUnexpectedResult;
+}
+
+test "RDF entailment handles every allocation failure without leaks" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseRdfEntailmentAllocations,
+        .{},
+    );
+}
+
+fn exerciseRdfsEntailmentAllocations(allocator: std.mem.Allocator) !void {
+    var premise = rdf.Graph.init(allocator);
+    defer premise.deinit();
+    const subject = try premise.terms.internNamedNode("https://example.com/subject");
+    const child_property = try premise.terms.internNamedNode("https://example.com/child");
+    const parent_property = try premise.terms.internNamedNode("https://example.com/parent");
+    const object = try premise.terms.internNamedNode("https://example.com/object");
+    const domain = try premise.terms.internNamedNode("https://example.com/Domain");
+    const sub_property = try premise.terms.internNamedNode(rdf.rdfs_namespace ++ "subPropertyOf");
+    const rdfs_domain = try premise.terms.internNamedNode(rdf.rdfs_namespace ++ "domain");
+    _ = try premise.add(.{ .subject = child_property, .predicate = sub_property, .object = parent_property });
+    _ = try premise.add(.{ .subject = parent_property, .predicate = rdfs_domain, .object = domain });
+    _ = try premise.add(.{ .subject = subject, .predicate = child_property, .object = object });
+
+    var conclusion = rdf.Graph.init(allocator);
+    defer conclusion.deinit();
+    const conclusion_subject = try conclusion.terms.internNamedNode("https://example.com/subject");
+    const rdf_type = try conclusion.terms.internNamedNode(rdf.rdf_namespace ++ "type");
+    const conclusion_domain = try conclusion.terms.internNamedNode("https://example.com/Domain");
+    _ = try conclusion.add(.{
+        .subject = conclusion_subject,
+        .predicate = rdf_type,
+        .object = conclusion_domain,
+    });
+    if (!try entailsGraph(allocator, &premise, &conclusion, .{ .regime = .rdfs })) {
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "RDFS entailment handles every allocation failure without leaks" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseRdfsEntailmentAllocations,
+        .{},
+    );
+}
+
+fn exerciseConsistencyAllocations(allocator: std.mem.Allocator) !void {
+    var premise = rdf.Graph.init(allocator);
+    defer premise.deinit();
+    const subject = try premise.terms.internNamedNode("https://example.com/subject");
+    const predicate = try premise.terms.internNamedNode("https://example.com/predicate");
+    const literal = try premise.terms.internTypedLiteral("value", rdf.rdf_lang_string);
+    _ = try premise.add(.{ .subject = subject, .predicate = predicate, .object = literal });
+    if (try isGraphConsistent(allocator, &premise, .{ .regime = .rdf })) {
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "consistency checking handles every allocation failure without leaks" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseConsistencyAllocations,
+        .{},
+    );
+}
+
 fn exerciseMaterializationAllocations(allocator: std.mem.Allocator) !void {
     var graph = rdf.Graph.init(allocator);
     defer graph.deinit();

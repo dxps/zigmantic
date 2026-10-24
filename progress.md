@@ -166,8 +166,12 @@ separate packages only after their APIs and release cycles become independently 
 - Public `entailsGraph` and `isGraphConsistent` APIs now compose simple, RDF, and RDFS
   behavior; the official runner contains no separate reasoning implementation.
 - Plain RDF entailment now includes conclusion-directed `rdf:_n` property axioms.
+- Adversarial simple-entailment tests cover backtracking, shared blank-node consistency,
+  cycles, and valid non-injective mappings.
+- Exhaustive allocation-failure injection covers all public entailment and consistency
+  entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 88 tests; all 827 integrated syntax/evaluation cases still pass.
+- The local suite has 95 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -186,10 +190,9 @@ separate packages only after their APIs and release cycles become independently 
 ## Next actions
 
 1. Complete XMLLiteral validation with a standards-compliant XML parser.
-2. Add allocation-failure and adversarial graph coverage around the public entailment
-   APIs.
-3. Audit generalized RDF intermediate requirements and normative semantics beyond
+2. Audit generalized RDF intermediate requirements and normative semantics beyond
    the official suite before declaring milestone 6 complete.
+3. Add fuzzing for entailment matching and rule-closure invariants.
 
 ## Session log
 
@@ -655,3 +658,15 @@ separate packages only after their APIs and release cycles become independently 
 - Added direct public API tests for simple existential matching, target-only RDF
   container axioms, and `rdfD1`.
 - Passed all 48 active model-theory cases, 827 syntax/evaluation cases, and 88 local tests.
+
+### 2026-10-24 — Entailment API robustness
+
+- Added adversarial simple-entailment cases requiring genuine mapping backtracking.
+- Verified consistent shared blank-node mappings, cyclic conclusions, valid
+  non-injective mappings, and rejection of incompatible shared mappings.
+- Added isolated exhaustive allocation-failure injection for simple, RDF, and RDFS
+  entailment plus datatype consistency checking.
+- Verified that every public path propagates allocation failure without leaks or
+  swallowed errors while leaving caller-owned graphs unchanged.
+- Passed all 48 model-theory cases, 827 syntax/evaluation cases, and 95 local tests;
+  the complete build now runs 100 tests.

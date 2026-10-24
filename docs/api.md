@@ -154,6 +154,12 @@ matches conclusion blank nodes existentially, and returns owned-allocation error
 caller. `EntailmentOptions` selects the regime and explicitly recognized datatype
 profile.
 
+Conclusion blank-node mappings may be non-injective, must remain consistent across all
+conclusion triples, and are explored with backtracking when an earlier candidate blocks
+a later match. As required by simple entailment, this search is potentially exponential
+in adversarial conclusions. Allocation failure during graph copying, closure, or mapping
+is returned without leaking memory or modifying either input graph.
+
 `entailment.isGraphConsistent` applies the same regime and datatype semantics without a
 conclusion graph. Simple graphs are always consistent. Under RDF and RDFS, an
 inconsistent premise entails every conclusion through `entailsGraph`.

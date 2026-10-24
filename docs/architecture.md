@@ -137,6 +137,13 @@ matching for simple, RDF, and RDFS regimes. `isGraphConsistent` exposes the corr
 satisfiability check. Both create internal state and leave their premise and conclusion
 graphs unchanged.
 
+Existential matching uses a reversible expected-blank-to-actual-term mapping. Each
+candidate records the mapping length and truncates it on failure, allowing complete
+backtracking across shared blank nodes and cycles. Mappings are intentionally not
+injective because distinct conclusion blank nodes may denote the same resource. The
+implementation accepts the NP-complete worst-case complexity inherent in simple RDF
+entailment rather than substituting an incomplete greedy matcher.
+
 Forward inference uses an explicit `Materialization` rather than modifying an asserted
 `Graph`. The materialization copies source terms into one owned pool, stores the union
 in the indexed store's default graph, and maintains a separate exact set for asserted
@@ -194,3 +201,8 @@ Plain RDF composition also instantiates target-aware `rdf:_n rdf:type rdf:Proper
 axioms. RDFS composition uses the richer container layer before applying its general
 fixed-point rules. The W3C runner now supplies only parsed graphs and manifest options;
 it contains no independent entailment algorithm.
+
+Allocation-failure injection independently exercises simple entailment, RDF closure and
+datatype matching, RDFS fixed-point closure, and consistency checking. The regimes are
+tested separately so allocation counts remain deterministic while every public path and
+owned temporary structure is covered.
