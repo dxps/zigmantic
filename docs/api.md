@@ -167,6 +167,12 @@ The lowered BGP exposes ordered `GroupElement` values. Triple elements reference
 elements pair an expression with its introduced variable. `Query.patterns` remains the
 direct expanded-triple view for callers that do not yet consume group operations.
 
+Nested groups use query-local `GroupId` values. `GroupElement` distinguishes nested,
+OPTIONAL, MINUS, and UNION structures in addition to triples, FILTER, and BIND. EXISTS
+and NOT EXISTS expressions reference the same group arena. `Query.groupElements` safely
+resolves IDs, while `BasicGraphPattern.groups` provides the equivalent allocation-free
+resolver and root ID from the lowered algebra view.
+
 `Query.projection` and `Query.patterns` return borrowed slices. `Query.lower` produces
 an allocation-free `Project(BGP)` algebra view over the same storage. These views remain
 valid only while the query is alive and structurally unchanged. A `Query` must not be

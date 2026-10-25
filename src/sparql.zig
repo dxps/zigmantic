@@ -22,6 +22,10 @@ pub const TokenTag = enum {
     bind,
     in,
     not,
+    exists,
+    minus_keyword,
+    union_keyword,
+    optional,
     variable,
     iri_reference,
     prefixed_name,
@@ -352,6 +356,14 @@ pub const Tokenizer = struct {
             .in
         else if (std.ascii.eqlIgnoreCase(lexeme, "NOT"))
             .not
+        else if (std.ascii.eqlIgnoreCase(lexeme, "EXISTS"))
+            .exists
+        else if (std.ascii.eqlIgnoreCase(lexeme, "MINUS"))
+            .minus_keyword
+        else if (std.ascii.eqlIgnoreCase(lexeme, "UNION"))
+            .union_keyword
+        else if (std.ascii.eqlIgnoreCase(lexeme, "OPTIONAL"))
+            .optional
         else if (std.mem.eql(u8, lexeme, "a"))
             .keyword_a
         else if (std.mem.eql(u8, lexeme, "true") or std.mem.eql(u8, lexeme, "false"))
@@ -492,6 +504,13 @@ pub const MembershipExpression = struct {
     negated: bool = false,
 };
 
+pub const GroupId = usize;
+
+pub const ExistsExpression = struct {
+    group: GroupId,
+    negated: bool = false,
+};
+
 pub const Expression = union(enum) {
     variable: []const u8,
     iri: []const u8,
@@ -500,6 +519,7 @@ pub const Expression = union(enum) {
     unary: UnaryExpression,
     binary: BinaryExpression,
     membership: MembershipExpression,
+    exists: ExistsExpression,
     call: FunctionCall,
 };
 
@@ -508,10 +528,23 @@ pub const Binding = struct {
     variable: []const u8,
 };
 
+pub const BinaryGroup = struct {
+    left: GroupId,
+    right: GroupId,
+};
+
 pub const GroupElement = union(enum) {
     triple: usize,
     filter: ExpressionId,
     bind: Binding,
+    group: GroupId,
+    optional: GroupId,
+    minus: GroupId,
+    union_group: BinaryGroup,
+};
+
+const Group = struct {
+    elements: std.ArrayList(GroupElement) = .empty,
 };
 
 pub const ProjectionExpression = struct {
@@ -545,7 +578,8 @@ pub const Query = struct {
     projection_variables: std.ArrayList([]const u8) = .empty,
     projection_items: std.ArrayList(ProjectionItem) = .empty,
     where_patterns: std.ArrayList(TriplePattern) = .empty,
-    group_elements: std.ArrayList(GroupElement) = .empty,
+    groups: std.ArrayList(Group) = .empty,
+    root_group: ?GroupId = null,
     paths: std.ArrayList(Path) = .empty,
     negated_properties: std.ArrayList(NegatedProperty) = .empty,
     expressions: std.ArrayList(Expression) = .empty,
@@ -568,7 +602,8 @@ pub const Query = struct {
         self.projection_variables.deinit(self.allocator);
         self.projection_items.deinit(self.allocator);
         self.where_patterns.deinit(self.allocator);
-        self.group_elements.deinit(self.allocator);
+        for (self.groups.items) |*group| group.elements.deinit(self.allocator);
+        self.groups.deinit(self.allocator);
         self.paths.deinit(self.allocator);
         self.negated_properties.deinit(self.allocator);
         self.expressions.deinit(self.allocator);
@@ -615,6 +650,11 @@ pub const Query = struct {
         return self.expression_arguments.items[range.start..][0..range.len];
     }
 
+    pub fn groupElements(self: *const Query, id: GroupId) ?[]const GroupElement {
+        if (id >= self.groups.items.len) return null;
+        return self.groups.items[id].elements.items;
+    }
+
     pub fn negatedPropertySet(
         self: *const Query,
         set: NegatedPropertySet,
@@ -633,7 +673,14 @@ pub const Query = struct {
             .projection = self.projection(),
             .input = .{ .bgp = .{
                 .triples = self.patterns(),
-                .elements = self.group_elements.items,
+                .elements = if (self.root_group) |root|
+                    self.groups.items[root].elements.items
+                else
+                    &.{},
+                .groups = .{
+                    .owner = self,
+                    .root = self.root_group,
+                },
                 .paths = self.paths.items,
                 .negated_properties = self.negated_properties.items,
             } },
@@ -650,9 +697,19 @@ pub const Query = struct {
     }
 };
 
+pub const GroupTable = struct {
+    owner: *const Query,
+    root: ?GroupId,
+
+    pub fn elements(self: GroupTable, id: GroupId) ?[]const GroupElement {
+        return self.owner.groupElements(id);
+    }
+};
+
 pub const BasicGraphPattern = struct {
     triples: []const TriplePattern,
     elements: []const GroupElement,
+    groups: GroupTable,
     paths: []const Path,
     negated_properties: []const NegatedProperty,
 };
@@ -698,6 +755,7 @@ const Parser = struct {
     tokenizer: Tokenizer,
     query: Query,
     lookahead: ?Token = null,
+    current_group: ?GroupId = null,
 
     fn parse(self: *Parser) ParseError!void {
         try self.parsePrologue();
@@ -736,6 +794,9 @@ const Parser = struct {
 
         if ((try self.peek()).tag == .where) _ = try self.take();
         try self.expect(.left_brace);
+        const root = try self.addGroup();
+        self.query.root_group = root;
+        self.current_group = root;
         try self.parseBasicGraphPattern();
         try self.expect(.right_brace);
         try self.expect(.eof);
@@ -947,6 +1008,11 @@ const Parser = struct {
     }
 
     fn parseUnaryExpression(self: *Parser) ParseError!ExpressionId {
+        if ((try self.peek()).tag == .not) {
+            _ = try self.take();
+            try self.expect(.exists);
+            return self.parseExistsExpression(true);
+        }
         const operator: ?UnaryOperator = switch ((try self.peek()).tag) {
             .plus => .plus,
             .minus => .minus,
@@ -1010,8 +1076,16 @@ const Parser = struct {
                 try self.expect(.right_parenthesis);
                 break :grouped expression_id;
             },
+            .exists => self.parseExistsExpression(false),
             else => error.InvalidSyntax,
         };
+    }
+
+    fn parseExistsExpression(self: *Parser, negated: bool) ParseError!ExpressionId {
+        return self.addExpression(.{ .exists = .{
+            .group = try self.parseBracedGroup(),
+            .negated = negated,
+        } });
     }
 
     fn parseFunctionCall(
@@ -1097,6 +1171,23 @@ const Parser = struct {
     fn parseBasicGraphPattern(self: *Parser) ParseError!void {
         while (true) {
             if ((try self.peek()).tag == .right_brace) return;
+            if ((try self.peek()).tag == .left_brace) {
+                try self.parseNestedOrUnionGroup();
+                if ((try self.peek()).tag == .dot) _ = try self.take();
+                continue;
+            }
+            if ((try self.peek()).tag == .optional) {
+                _ = try self.take();
+                try self.appendGroupElement(.{ .optional = try self.parseBracedGroup() });
+                if ((try self.peek()).tag == .dot) _ = try self.take();
+                continue;
+            }
+            if ((try self.peek()).tag == .minus_keyword) {
+                _ = try self.take();
+                try self.appendGroupElement(.{ .minus = try self.parseBracedGroup() });
+                if ((try self.peek()).tag == .dot) _ = try self.take();
+                continue;
+            }
             if ((try self.peek()).tag == .filter) {
                 try self.parseFilter();
                 if ((try self.peek()).tag == .dot) _ = try self.take();
@@ -1118,20 +1209,49 @@ const Parser = struct {
             if (separator.tag == .right_brace) return;
             if (separator.tag == .dot) {
                 _ = try self.take();
-            } else if (separator.tag != .filter and separator.tag != .bind) {
+            } else if (!canStartGroupNonTriple(separator.tag)) {
                 return error.InvalidSyntax;
             }
         }
+    }
+
+    fn parseNestedOrUnionGroup(self: *Parser) ParseError!void {
+        var left = try self.parseBracedGroup();
+        while ((try self.peek()).tag == .union_keyword) {
+            _ = try self.take();
+            const right = try self.parseBracedGroup();
+            const combined = try self.addGroup();
+            try self.query.groups.items[combined].elements.append(
+                self.allocator,
+                .{ .union_group = .{ .left = left, .right = right } },
+            );
+            left = combined;
+        }
+        try self.appendGroupElement(.{ .group = left });
+    }
+
+    fn parseBracedGroup(self: *Parser) ParseError!GroupId {
+        try self.expect(.left_brace);
+        const group_id = try self.addGroup();
+        const parent = self.current_group;
+        self.current_group = group_id;
+        errdefer self.current_group = parent;
+        try self.parseBasicGraphPattern();
+        try self.expect(.right_brace);
+        self.current_group = parent;
+        return group_id;
     }
 
     fn parseFilter(self: *Parser) ParseError!void {
         try self.expect(.filter);
         const bracketed = (try self.peek()).tag == .left_parenthesis;
         const expression_id = try self.parseExpression();
-        if (!bracketed and self.query.expressions.items[expression_id] != .call) {
+        if (!bracketed and self.query.expressions.items[expression_id] != .call and
+            self.query.expressions.items[expression_id] != .exists)
+        {
             return error.InvalidSyntax;
         }
-        try self.query.group_elements.append(self.allocator, .{
+        try self.appendGroupElement(.{
             .filter = expression_id,
         });
     }
@@ -1146,23 +1266,40 @@ const Parser = struct {
             return error.InvalidSyntax;
         }
         try self.expect(.right_parenthesis);
-        try self.query.group_elements.append(self.allocator, .{ .bind = .{
+        try self.appendGroupElement(.{ .bind = .{
             .expression = expression_id,
             .variable = try self.query.own(variable.lexeme),
         } });
     }
 
     fn groupHasVariable(self: *const Parser, name: []const u8) bool {
-        for (self.query.where_patterns.items) |triple| {
-            if (termIsVariable(triple.subject, name) or
-                termIsVariable(triple.predicate, name) or
-                termIsVariable(triple.object, name))
-            {
-                return true;
+        const group_id = self.current_group orelse return false;
+        return self.groupContainsVariable(group_id, name);
+    }
+
+    fn groupContainsVariable(
+        self: *const Parser,
+        group_id: GroupId,
+        name: []const u8,
+    ) bool {
+        for (self.query.groups.items[group_id].elements.items) |element| {
+            switch (element) {
+                .triple => |index| {
+                    const triple = self.query.where_patterns.items[index];
+                    if (termIsVariable(triple.subject, name) or
+                        termIsVariable(triple.predicate, name) or
+                        termIsVariable(triple.object, name))
+                    {
+                        return true;
+                    }
+                },
+                .bind => |binding| if (std.mem.eql(u8, binding.variable, name)) return true,
+                .group => |nested| if (self.groupContainsVariable(nested, name)) return true,
+                .optional => |nested| if (self.groupContainsVariable(nested, name)) return true,
+                .union_group => |branches| if (self.groupContainsVariable(branches.left, name) or
+                    self.groupContainsVariable(branches.right, name)) return true,
+                else => {},
             }
-        }
-        for (self.query.group_elements.items) |element| {
-            if (element == .bind and std.mem.eql(u8, element.bind.variable, name)) return true;
         }
         return false;
     }
@@ -1422,7 +1559,18 @@ const Parser = struct {
     fn appendTriple(self: *Parser, triple: TriplePattern) ParseError!void {
         const index = self.query.where_patterns.items.len;
         try self.query.where_patterns.append(self.allocator, triple);
-        try self.query.group_elements.append(self.allocator, .{ .triple = index });
+        try self.appendGroupElement(.{ .triple = index });
+    }
+
+    fn addGroup(self: *Parser) ParseError!GroupId {
+        const id = self.query.groups.items.len;
+        try self.query.groups.append(self.allocator, .{});
+        return id;
+    }
+
+    fn appendGroupElement(self: *Parser, element: GroupElement) ParseError!void {
+        const group_id = self.current_group orelse return error.InvalidSyntax;
+        try self.query.groups.items[group_id].elements.append(self.allocator, element);
     }
 
     fn parseStringLiteral(self: *Parser, raw: []const u8) ParseError!Literal {
@@ -1567,6 +1715,11 @@ fn isWhitespace(byte: u8) bool {
 
 fn canStartPredicate(tag: TokenTag) bool {
     return tag == .variable or canStartPath(tag);
+}
+
+fn canStartGroupNonTriple(tag: TokenTag) bool {
+    return tag == .filter or tag == .bind or tag == .left_brace or tag == .optional or
+        tag == .minus_keyword;
 }
 
 fn termIsVariable(term: PatternTerm, name: []const u8) bool {
@@ -2256,6 +2409,44 @@ test "preserves ordered BIND elements and validates group scope" {
     try std.testing.expect(elements[3] == .filter);
 }
 
+test "preserves nested UNION OPTIONAL and MINUS group structure" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "PREFIX ex: <https://example.com/> SELECT * { " ++
+            "{ ?s ex:p ?o } UNION { ?s ex:q ?o } " ++
+            "OPTIONAL { ?s ex:r ?optional } MINUS { ?s ex:hidden ?value } }",
+    );
+    defer query.deinit();
+
+    const root = query.lower().project.input.bgp.elements;
+    try std.testing.expectEqual(@as(usize, 3), root.len);
+    const union_wrapper = query.groupElements(root[0].group).?;
+    try std.testing.expectEqual(@as(usize, 1), union_wrapper.len);
+    const branches = union_wrapper[0].union_group;
+    try std.testing.expectEqual(@as(usize, 1), query.groupElements(branches.left).?.len);
+    try std.testing.expectEqual(@as(usize, 1), query.groupElements(branches.right).?.len);
+    try std.testing.expectEqual(@as(usize, 1), query.groupElements(root[1].optional).?.len);
+    try std.testing.expectEqual(@as(usize, 1), query.groupElements(root[2].minus).?.len);
+}
+
+test "parses EXISTS and NOT EXISTS with query-local groups" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "SELECT * { ?s ?p ?o " ++
+            "FILTER(EXISTS { ?s ?p ?o } && NOT EXISTS { ?s ?q ?v }) }",
+    );
+    defer query.deinit();
+
+    const filter_id = query.lower().project.input.bgp.elements[1].filter;
+    const conjunction = query.expression(filter_id).?.binary;
+    const exists = query.expression(conjunction.left).?.exists;
+    const not_exists = query.expression(conjunction.right).?.exists;
+    try std.testing.expect(!exists.negated);
+    try std.testing.expect(not_exists.negated);
+    try std.testing.expectEqual(@as(usize, 1), query.groupElements(exists.group).?.len);
+    try std.testing.expectEqual(@as(usize, 1), query.groupElements(not_exists.group).?.len);
+}
+
 test "lowers SELECT syntax to project over a BGP" {
     var query = try parseQuery(std.testing.allocator, "SELECT ?s WHERE { ?s <urn:p> <urn:o> }");
     defer query.deinit();
@@ -2281,7 +2472,8 @@ test "rejects malformed or unsupported query syntax" {
         "SELECT (SUM(*) AS ?sum) {}",                           "SELECT (datatype(DISTINCT ?x) AS ?dt) {}",                           "SELECT (COUNT(?x; SEPARATOR=',') AS ?count) {}",
         "SELECT (unknown(?x) AS ?value) {}",                    "SELECT (GROUP_CONCAT(?x; SEPARATOR='x'^^<urn:type>) AS ?joined) {}", "SELECT * { ?s ?p ?o FILTER(?o IN(1,)) }",
         "SELECT * { ?s ?p ?o FILTER(?o < ?s < 3) }",            "SELECT * { ?s ?p ?o FILTER(?o & true) }",                            "SELECT * { ?s ?p ?o BIND(?o AS ?o) }",
-        "SELECT * { BIND(1 AS ?x) BIND(2 AS ?x) }",             "SELECT * { FILTER true }",
+        "SELECT * { BIND(1 AS ?x) BIND(2 AS ?x) }",             "SELECT * { FILTER true }",                                           "SELECT * { { ?s ?p ?o } BIND(1 AS ?s) }",
+        "SELECT * { { ?s ?p ?o } UNION }",                      "SELECT * { MINUS ?s ?p ?o }",                                        "SELECT * { FILTER(EXISTS ?s ?p ?o) }",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -2298,12 +2490,14 @@ test "query parsing handles every allocation failure" {
             "SELECT DISTINCT ?s (?s + ex:function(?o, 2) AS ?value) WHERE { " ++
             "[ ex:inner \"hello\\n\"@EN ] (^ex:p/ex:item+|!(ex:skip|^a))? (12.5 true) ; " ++
             "ex:q ?o, \"value\"^^ex:kind . " ++
-            "FILTER(?o NOT IN(1, 2)) BIND(?o+1 AS ?bound) }",
+            "FILTER(?o NOT IN(1, 2)) BIND(?o+1 AS ?bound) " ++
+            "FILTER(EXISTS { ?o ex:seen true } && NOT EXISTS { ?o ex:hidden true }) " ++
+            "MINUS { ?o ex:removed true } }",
     });
 }
 
 fn expectQueryParses(allocator: std.mem.Allocator, input: []const u8) !void {
     var query = try parseQuery(allocator, input);
     defer query.deinit();
-    try std.testing.expectEqual(@as(usize, 8), query.patterns().len);
+    try std.testing.expectEqual(@as(usize, 11), query.patterns().len);
 }

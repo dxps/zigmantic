@@ -263,6 +263,13 @@ to query-owned expressions, and BIND stores its introduced variable. This preser
 group ordering and scope without abandoning the compact BGP representation used by
 existing consumers.
 
+Nested groups live in a query-owned arena and are referenced by stable `GroupId` values.
+Group elements represent nesting, OPTIONAL, MINUS, and binary UNION structure; EXISTS
+expressions point into the same arena. Recursive scope checks follow preceding nested,
+optional, and union branches for BIND aliases. The borrowed algebra carries a
+`GroupTable` resolver back to the immutable query owner, avoiding allocation or copied
+group slices during lowering.
+
 SPARQL query grammar progress is measured against the pinned W3C SPARQL 1.1
 query-syntax manifest. The runner executes every manifest entry and keeps an exact
 test-ID baseline for unsupported positive syntax, so new grammar support removes named
