@@ -1,6 +1,7 @@
 //! SPARQL solution mappings and basic graph-pattern evaluation.
 
 const std = @import("std");
+const iri_mod = @import("iri.zig");
 const rdf = @import("rdf.zig");
 const sparql = @import("sparql.zig");
 const store_mod = @import("store.zig");
@@ -96,10 +97,7 @@ pub const ExpressionEvaluator = struct {
             .unary => |unary| self.evaluateUnary(unary, mapping),
             .binary => |binary| self.evaluateBinary(binary, mapping),
             .membership => |membership| self.evaluateMembership(membership, mapping),
-            .call => |call| if (std.mem.eql(u8, call.function, "bound"))
-                self.evaluateBound(call, mapping)
-            else
-                .{ .fault = error.UnsupportedExpression },
+            .call => |call| self.evaluateCall(call, mapping),
             .wildcard, .exists => .{
                 .fault = error.UnsupportedExpression,
             },
@@ -511,6 +509,223 @@ pub const ExpressionEvaluator = struct {
         };
         return self.internBoolean(mapping.get(variable) != null);
     }
+
+    fn evaluateCall(
+        self: *ExpressionEvaluator,
+        call: sparql.FunctionCall,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        if (std.mem.eql(u8, call.function, "bound")) return self.evaluateBound(call, mapping);
+        if (std.mem.eql(u8, call.function, "str") or
+            std.mem.eql(u8, call.function, "lang") or
+            std.mem.eql(u8, call.function, "datatype") or
+            std.mem.eql(u8, call.function, "iri") or
+            std.mem.eql(u8, call.function, "uri") or
+            std.mem.eql(u8, call.function, "abs") or
+            std.mem.eql(u8, call.function, "ceil") or
+            std.mem.eql(u8, call.function, "floor") or
+            std.mem.eql(u8, call.function, "round") or
+            std.mem.eql(u8, call.function, "isiri") or
+            std.mem.eql(u8, call.function, "isuri") or
+            std.mem.eql(u8, call.function, "isblank") or
+            std.mem.eql(u8, call.function, "isliteral") or
+            std.mem.eql(u8, call.function, "isnumeric"))
+        {
+            return self.evaluateCoreUnaryCall(call, mapping);
+        }
+        if (std.mem.eql(u8, call.function, "langmatches") or
+            std.mem.eql(u8, call.function, "sameterm"))
+        {
+            return self.evaluateCoreBinaryCall(call, mapping);
+        }
+        return .{ .fault = error.UnsupportedExpression };
+    }
+
+    fn evaluateCoreUnaryCall(
+        self: *ExpressionEvaluator,
+        call: sparql.FunctionCall,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const arguments = self.query.expressionArguments(call.arguments) orelse
+            return .{ .fault = error.UnsupportedExpression };
+        if (arguments.len != 1) return .{ .fault = error.UnsupportedExpression };
+        const result = try self.evaluate(arguments[0], mapping);
+        const value = switch (result) {
+            .value => |item| item,
+            .fault => return result,
+        };
+        const view = self.terms.view(value) orelse return .{ .fault = error.UnknownTerm };
+
+        if (std.mem.eql(u8, call.function, "str")) return self.evaluateStr(view);
+        if (std.mem.eql(u8, call.function, "lang")) return self.evaluateLang(view);
+        if (std.mem.eql(u8, call.function, "datatype")) return self.evaluateDatatype(view);
+        if (std.mem.eql(u8, call.function, "iri") or std.mem.eql(u8, call.function, "uri")) {
+            return self.evaluateIri(view);
+        }
+        if (std.mem.eql(u8, call.function, "abs") or
+            std.mem.eql(u8, call.function, "ceil") or
+            std.mem.eql(u8, call.function, "floor") or
+            std.mem.eql(u8, call.function, "round"))
+        {
+            return self.evaluateNumericCall(call.function, value);
+        }
+
+        const predicate = if (std.mem.eql(u8, call.function, "isiri") or
+            std.mem.eql(u8, call.function, "isuri"))
+            view == .named_node
+        else if (std.mem.eql(u8, call.function, "isblank"))
+            view == .blank_node
+        else if (std.mem.eql(u8, call.function, "isliteral"))
+            view == .literal
+        else if (std.mem.eql(u8, call.function, "isnumeric"))
+            termViewIsNumeric(view)
+        else
+            return .{ .fault = error.UnsupportedExpression };
+        return self.internBoolean(predicate);
+    }
+
+    fn evaluateCoreBinaryCall(
+        self: *ExpressionEvaluator,
+        call: sparql.FunctionCall,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const arguments = self.query.expressionArguments(call.arguments) orelse
+            return .{ .fault = error.UnsupportedExpression };
+        if (arguments.len != 2) return .{ .fault = error.UnsupportedExpression };
+        const left_result = try self.evaluate(arguments[0], mapping);
+        const left = switch (left_result) {
+            .value => |value| value,
+            .fault => return left_result,
+        };
+        const right_result = try self.evaluate(arguments[1], mapping);
+        const right = switch (right_result) {
+            .value => |value| value,
+            .fault => return right_result,
+        };
+
+        if (std.mem.eql(u8, call.function, "sameterm")) {
+            const equal = self.terms.eqlTerm(left, &self.terms, right) catch
+                return .{ .fault = error.UnknownTerm };
+            return self.internBoolean(equal);
+        }
+        if (std.mem.eql(u8, call.function, "langmatches")) {
+            const language = self.simpleString(left) catch |fault| return .{ .fault = fault };
+            const range = self.simpleString(right) catch |fault| return .{ .fault = fault };
+            return self.internBoolean(languageMatches(language, range));
+        }
+        return .{ .fault = error.UnsupportedExpression };
+    }
+
+    fn evaluateStr(
+        self: *ExpressionEvaluator,
+        view: rdf.TermView,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const lexical = switch (view) {
+            .named_node => |iri| iri,
+            .literal => |literal| literal.lexical_form,
+            .blank_node => return .{ .fault = error.TypeError },
+        };
+        return self.internComputedLiteral(lexical, rdf.xsd_string);
+    }
+
+    fn evaluateLang(
+        self: *ExpressionEvaluator,
+        view: rdf.TermView,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const literal = switch (view) {
+            .literal => |value| value,
+            else => return .{ .fault = error.TypeError },
+        };
+        return self.internComputedLiteral(literal.language orelse "", rdf.xsd_string);
+    }
+
+    fn evaluateDatatype(
+        self: *ExpressionEvaluator,
+        view: rdf.TermView,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const literal = switch (view) {
+            .literal => |value| value,
+            else => return .{ .fault = error.TypeError },
+        };
+        return self.internNamedNode(literal.datatype);
+    }
+
+    fn evaluateIri(
+        self: *ExpressionEvaluator,
+        view: rdf.TermView,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        switch (view) {
+            .named_node => |iri| return self.internNamedNode(iri),
+            .literal => |literal| {
+                if (!std.mem.eql(u8, literal.datatype, rdf.xsd_string)) {
+                    return .{ .fault = error.TypeError };
+                }
+                if (iri_mod.isAbsolute(literal.lexical_form)) {
+                    return self.internNamedNode(literal.lexical_form);
+                }
+                const base = self.query.base_iri orelse return .{ .fault = error.TypeError };
+                const resolved = iri_mod.resolveAlloc(
+                    self.allocator,
+                    base,
+                    literal.lexical_form,
+                ) catch |err| return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => .{ .fault = error.TypeError },
+                };
+                defer self.allocator.free(resolved);
+                return self.internNamedNode(resolved);
+            },
+            .blank_node => return .{ .fault = error.TypeError },
+        }
+    }
+
+    fn evaluateNumericCall(
+        self: *ExpressionEvaluator,
+        function: []const u8,
+        value: rdf.TermId,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const numeric = self.numericValue(value) catch |fault| return .{ .fault = fault };
+        return switch (numeric) {
+            .integer => |integer| if (std.mem.eql(u8, function, "abs")) absolute: {
+                if (integer >= 0) break :absolute .{ .value = value };
+                const positive = @subWithOverflow(@as(i128, 0), integer);
+                if (positive[1] != 0) break :absolute .{ .fault = error.TypeError };
+                break :absolute self.internInteger(positive[0]);
+            } else .{ .value = value },
+            .decimal => |number| self.evaluateFloatingCall(function, number, rdf.xsd_decimal),
+            .float32 => |number| self.evaluateFloatingCall(function, number, rdf.xsd_float),
+            .double => |number| self.evaluateFloatingCall(function, number, rdf.xsd_double),
+        };
+    }
+
+    fn evaluateFloatingCall(
+        self: *ExpressionEvaluator,
+        function: []const u8,
+        number: f64,
+        datatype: []const u8,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const value = if (std.mem.eql(u8, function, "abs"))
+            @abs(number)
+        else if (std.mem.eql(u8, function, "ceil"))
+            @ceil(number)
+        else if (std.mem.eql(u8, function, "floor"))
+            @floor(number)
+        else if (std.mem.eql(u8, function, "round"))
+            @floor(number + 0.5)
+        else
+            return .{ .fault = error.UnsupportedExpression };
+        return self.internFloat(value, datatype);
+    }
+
+    fn simpleString(self: *const ExpressionEvaluator, value: rdf.TermId) ExpressionFault![]const u8 {
+        const view = self.terms.view(value) orelse return error.UnknownTerm;
+        const literal = switch (view) {
+            .literal => |item| item,
+            else => return error.TypeError,
+        };
+        if (!std.mem.eql(u8, literal.datatype, rdf.xsd_string)) return error.TypeError;
+        return literal.lexical_form;
+    }
 };
 
 const BooleanResult = union(enum) {
@@ -627,6 +842,13 @@ fn parseBoolean(lexical: []const u8) ?bool {
     if (std.mem.eql(u8, lexical, "true") or std.mem.eql(u8, lexical, "1")) return true;
     if (std.mem.eql(u8, lexical, "false") or std.mem.eql(u8, lexical, "0")) return false;
     return null;
+}
+
+fn languageMatches(language: []const u8, range: []const u8) bool {
+    if (std.mem.eql(u8, range, "*")) return language.len != 0;
+    if (std.ascii.eqlIgnoreCase(language, range)) return true;
+    return language.len > range.len and language[range.len] == '-' and
+        std.ascii.eqlIgnoreCase(language[0..range.len], range);
 }
 
 fn parseNumericFloat(lexical: []const u8) ?f64 {
@@ -1257,6 +1479,95 @@ test "reports numeric faults and compares strings" {
     try std.testing.expect(try evaluator.effectiveBooleanValue(ordered));
 }
 
+test "evaluates RDF term language datatype and IRI built-ins" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    const resource = try source.internNamedNode("urn:resource");
+    const label = try source.internLanguageLiteral("Hello", "EN-GB");
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "BASE <https://example.com/root/> SELECT (STR(?resource) AS ?str) " ++
+            "(LANG(?label) AS ?lang) (DATATYPE(?label) AS ?datatype) " ++
+            "(IRI('child') AS ?resolved) {}",
+    );
+    defer query.deinit();
+    var bindings = [_]SolutionBinding{
+        .{ .variable = "resource", .value = resource },
+        .{ .variable = "label", .value = label },
+    };
+    const mapping = SolutionMapping{ .bindings = bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+    const projection = query.projection().items;
+
+    const str = (try evaluator.evaluate(projection[0].expression.expression, mapping)).value;
+    const lang = (try evaluator.evaluate(projection[1].expression.expression, mapping)).value;
+    const datatype = (try evaluator.evaluate(projection[2].expression.expression, mapping)).value;
+    const resolved = (try evaluator.evaluate(projection[3].expression.expression, mapping)).value;
+    try std.testing.expectEqualStrings("urn:resource", evaluator.terms.view(str).?.literal.lexical_form);
+    try std.testing.expectEqualStrings("en-gb", evaluator.terms.view(lang).?.literal.lexical_form);
+    try std.testing.expectEqualStrings(rdf.rdf_lang_string, evaluator.terms.view(datatype).?.named_node);
+    try std.testing.expectEqualStrings(
+        "https://example.com/root/child",
+        evaluator.terms.view(resolved).?.named_node,
+    );
+}
+
+test "evaluates term predicates sameTerm and language matching" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    const resource = try source.internNamedNode("urn:resource");
+    const blank = try source.internBlankNode("blank");
+    const label = try source.internLanguageLiteral("Hello", "en-GB");
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "SELECT (isIRI(?resource) AS ?iri) (isBLANK(?blank) AS ?blank_test) " ++
+            "(isLITERAL(?label) AS ?literal) (isNUMERIC(2) AS ?numeric) " ++
+            "(sameTerm(?resource, ?resource) AS ?same) " ++
+            "(LANGMATCHES(LANG(?label), 'en') AS ?language) {}",
+    );
+    defer query.deinit();
+    var bindings = [_]SolutionBinding{
+        .{ .variable = "resource", .value = resource },
+        .{ .variable = "blank", .value = blank },
+        .{ .variable = "label", .value = label },
+    };
+    const mapping = SolutionMapping{ .bindings = bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+
+    for (query.projection().items) |item| {
+        const result = (try evaluator.evaluate(item.expression.expression, mapping)).value;
+        try std.testing.expect(try evaluator.effectiveBooleanValue(result));
+    }
+}
+
+test "evaluates numeric scalar built-ins and their type faults" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    const blank = try source.internBlankNode("blank");
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "SELECT (ABS(-2.5) AS ?abs) (CEIL(1.2) AS ?ceil) (FLOOR(1.8) AS ?floor) " ++
+            "(ROUND(-1.5) AS ?round) (STR(?blank) AS ?invalid) {}",
+    );
+    defer query.deinit();
+    var bindings = [_]SolutionBinding{.{ .variable = "blank", .value = blank }};
+    const mapping = SolutionMapping{ .bindings = bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+    const projection = query.projection().items;
+    const expected = [_][]const u8{ "2.5", "2", "1", "-1" };
+    for (projection[0..4], expected) |item, lexical| {
+        const result = (try evaluator.evaluate(item.expression.expression, mapping)).value;
+        try std.testing.expectEqualStrings(lexical, evaluator.terms.view(result).?.literal.lexical_form);
+    }
+    try std.testing.expectEqual(
+        error.TypeError,
+        (try evaluator.evaluate(projection[4].expression.expression, mapping)).fault,
+    );
+}
+
 test "expression evaluation handles every allocation failure" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
@@ -1288,7 +1599,7 @@ fn expectExpressionEvaluationSucceeds(allocator: std.mem.Allocator) !void {
     var source = rdf.TermPool.init(allocator);
     defer source.deinit();
     const value = try source.internTypedLiteral("3", rdf.xsd_integer);
-    var query = try sparql.parseQuery(allocator, "SELECT (?input + 2 AS ?output) {}");
+    var query = try sparql.parseQuery(allocator, "SELECT (ABS(?input + 2) AS ?output) {}");
     defer query.deinit();
     var bindings = [_]SolutionBinding{.{ .variable = "input", .value = value }};
     var evaluator = ExpressionEvaluator.init(allocator, &query, &source);

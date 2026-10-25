@@ -273,6 +273,12 @@ operand can determine the result despite an error in the other operand. Membersh
 similarly succeeds on any equal candidate and propagates a remembered error only when
 no candidate matches.
 
+Core scalar calls currently evaluate STR, LANG, LANGMATCHES, DATATYPE, IRI/URI, ABS,
+CEIL, FLOOR, ROUND, sameTerm, isIRI/isURI, isBLANK, isLITERAL, and isNUMERIC. IRI/URI
+returns existing IRIs unchanged and resolves relative simple-string arguments against
+the parsed query's BASE without mutating the source store. Language matching implements
+case-insensitive RFC 4647 basic filtering, including the `*` range.
+
 `effectiveBooleanValue` implements SPARQL EBV for valid boolean and numeric literals,
 simple strings, and language-tagged strings. Zero, NaN, false, and empty strings are
 false; other supported values are true. Invalid lexical forms and RDF terms without a
