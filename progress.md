@@ -178,12 +178,12 @@ separate packages only after their APIs and release cycles become independently 
   syntax tree, and a borrowed `Project(BGP)` algebra boundary for the first SPARQL 1.1
   query slice.
 - The official SPARQL 1.1 query-syntax manifest is pinned and vendored with all 97
-  referenced queries; the baseline passes all 32 negative cases and twelve positive
-  cases, with the remaining 53 positive cases tracked by exact test ID.
+  referenced queries; the baseline passes all 32 negative cases and fourteen positive
+  cases, with the remaining 51 positive cases tracked by exact test ID.
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 121 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 122 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -200,12 +200,14 @@ separate packages only after their APIs and release cycles become independently 
   foundations are implemented for SELECT projection over basic variable/IRI patterns;
   BASE/PREFIX prologues, relative IRI resolution, prefixed names, blank nodes, RDF
   literals, native literal forms, triple shorthand, property lists, and collections are
-  supported, with the official query-syntax suite pinned to an exact baseline.
+  supported together with complete property-path syntax and a query-owned path AST,
+  with the official query-syntax suite pinned to an exact baseline.
 - Milestones 8–14: not started.
 
 ## Next actions
 
-1. Add SPARQL property-path syntax and algebra, including paths nested in collections.
+1. Add expression tokenization and AST foundations, then support SELECT projection
+   expressions and aliases.
 2. Clear the corresponding official positive-syntax failures as grammar coverage grows.
 
 ## Session log
@@ -826,3 +828,22 @@ separate packages only after their APIs and release cycles become independently 
   case additionally requires property paths and remains an expected failure.
 - The local suite has 121 tests and the complete build has 127 tests; all 827 RDF
   syntax/evaluation cases continue to pass.
+
+### 2026-10-25 — SPARQL property paths
+
+- Added the complete SPARQL 1.1 property-path precedence grammar for alternatives,
+  sequences, inverse paths, grouping, and `?`, `*`, and `+` modifiers.
+- Added single and parenthesized negated property sets, including inverse members and
+  the `a` abbreviation.
+- Added query-owned path nodes and negated-property tables referenced by BGP predicate
+  path IDs.
+- Extended the borrowed BGP algebra view with the path tables needed to interpret those
+  IDs without depending on parser internals.
+- Preserved simple predicate IRIs and predicate variables in their compact existing
+  representation.
+- Added precedence, AST-shape, malformed-path, numeric-sign disambiguation, and
+  exhaustive allocation-failure tests.
+- Cleared `test_63` and `test_pp_coll`, including property paths nested inside blank-node
+  property lists and collections.
+- The official SPARQL baseline now passes 46/97 cases with 51 exact expected failures;
+  the local suite has 122 tests and the complete build has 128 tests.

@@ -140,6 +140,13 @@ collections use query-local anonymous nodes plus resolved `rdf:first`, `rdf:rest
 `rdf:nil` IRIs. Consequently, `Query.patterns` and `Query.lower` expose the expanded BGP
 rather than surface-syntax shorthand.
 
+Compound predicate paths are represented by query-local `PathId` values. `Query.path`
+returns the corresponding precedence node, and `Query.negatedPropertySet` returns the
+optional borrowed members of a valid negated-set range. Alternatives, sequences,
+inverse paths, grouping,
+zero-or-more, one-or-more, zero-or-one, and negated property sets are supported. The
+lowered BGP carries the complete path and negated-property tables alongside its triples.
+
 `Query.projection` and `Query.patterns` return borrowed slices. `Query.lower` produces
 an allocation-free `Project(BGP)` algebra view over the same storage. These views remain
 valid only while the query is alive and structurally unchanged. A `Query` must not be

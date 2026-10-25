@@ -244,6 +244,12 @@ collections emit `rdf:first`/`rdf:rest` chains ending at `rdf:nil`. Nested expan
 therefore reach algebra as ordinary BGP triples; no serializer-oriented syntax nodes or
 special collection operators leak into evaluation.
 
+Property paths use query-local node IDs over an owned precedence AST. Simple IRI
+predicates retain their direct term representation; compound predicates refer to path
+nodes for alternatives, sequences, inverse paths, cardinality modifiers, or negated
+property sets. The borrowed BGP algebra view carries both path nodes and negated-set
+members, making every predicate reference self-contained for later evaluation.
+
 SPARQL query grammar progress is measured against the pinned W3C SPARQL 1.1
 query-syntax manifest. The runner executes every manifest entry and keeps an exact
 test-ID baseline for unsupported positive syntax, so new grammar support removes named

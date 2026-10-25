@@ -36,6 +36,12 @@ pub const TokenTag = enum {
     right_parenthesis,
     semicolon,
     comma,
+    slash,
+    pipe,
+    caret,
+    bang,
+    plus,
+    question,
     dot,
     star,
     identifier,
@@ -74,17 +80,34 @@ pub const Tokenizer = struct {
             ')' => self.single(.right_parenthesis),
             ';' => self.single(.semicolon),
             ',' => self.single(.comma),
+            '/' => self.single(.slash),
+            '|' => self.single(.pipe),
+            '!' => self.single(.bang),
+            '+' => if (self.index + 1 < self.input.len and
+                (std.ascii.isDigit(self.input[self.index + 1]) or
+                    self.input[self.index + 1] == '.'))
+                self.word(offset)
+            else
+                self.single(.plus),
             '.' => if (self.index + 1 < self.input.len and
                 std.ascii.isDigit(self.input[self.index + 1]))
                 self.word(offset)
             else
                 self.single(.dot),
             '*' => self.single(.star),
-            '?', '$' => self.variable(),
+            '?' => if (self.index + 1 < self.input.len and
+                !isDelimiter(self.input[self.index + 1]))
+                self.variable()
+            else
+                self.single(.question),
+            '$' => self.variable(),
             '<' => self.iriReference(),
             '"', '\'' => self.stringLiteral(),
             '@' => self.languageTag(),
-            '^' => self.datatypeMarker(),
+            '^' => if (self.index + 1 < self.input.len and self.input[self.index + 1] == '^')
+                self.datatypeMarker()
+            else
+                self.single(.caret),
             else => self.word(offset),
         };
     }
@@ -207,7 +230,20 @@ pub const Tokenizer = struct {
     }
 
     fn word(self: *Tokenizer, offset: usize) ParseError!Token {
-        while (self.index < self.input.len and !isWordDelimiter(self.input[self.index])) {
+        while (self.index < self.input.len) {
+            if (isWordDelimiter(self.input[self.index])) {
+                if (self.input[self.index] == '+' and self.index == offset) {
+                    self.index += 1;
+                    continue;
+                }
+                if (self.input[self.index] == '+' and
+                    isNumericExponentPrefix(self.input[offset..self.index]))
+                {
+                    self.index += 1;
+                    continue;
+                }
+                break;
+            }
             if (self.input[self.index] == '\\') {
                 self.index += 1;
                 if (self.index == self.input.len) return error.InvalidSyntax;
@@ -277,8 +313,37 @@ pub const Modifier = enum {
 pub const PatternTerm = union(enum) {
     variable: []const u8,
     iri: []const u8,
+    path: PathId,
     blank_node: BlankNode,
     literal: Literal,
+};
+
+pub const PathId = usize;
+
+pub const BinaryPath = struct {
+    left: PathId,
+    right: PathId,
+};
+
+pub const NegatedProperty = struct {
+    iri: []const u8,
+    inverse: bool = false,
+};
+
+pub const NegatedPropertySet = struct {
+    start: usize,
+    len: usize,
+};
+
+pub const Path = union(enum) {
+    iri: []const u8,
+    inverse: PathId,
+    sequence: BinaryPath,
+    alternative: BinaryPath,
+    zero_or_more: PathId,
+    one_or_more: PathId,
+    zero_or_one: PathId,
+    negated_property_set: NegatedPropertySet,
 };
 
 pub const BlankNode = union(enum) {
@@ -317,6 +382,8 @@ pub const Query = struct {
     prefixes: std.ArrayList(Prefix) = .empty,
     projection_variables: std.ArrayList([]const u8) = .empty,
     where_patterns: std.ArrayList(TriplePattern) = .empty,
+    paths: std.ArrayList(Path) = .empty,
+    negated_properties: std.ArrayList(NegatedProperty) = .empty,
     owned_strings: std.ArrayList([]u8) = .empty,
     next_blank_node: usize = 0,
 
@@ -334,6 +401,8 @@ pub const Query = struct {
         self.prefixes.deinit(self.allocator);
         self.projection_variables.deinit(self.allocator);
         self.where_patterns.deinit(self.allocator);
+        self.paths.deinit(self.allocator);
+        self.negated_properties.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -352,11 +421,32 @@ pub const Query = struct {
         return self.prefixes.items;
     }
 
+    pub fn path(self: *const Query, id: PathId) ?Path {
+        if (id >= self.paths.items.len) return null;
+        return self.paths.items[id];
+    }
+
+    pub fn negatedPropertySet(
+        self: *const Query,
+        set: NegatedPropertySet,
+    ) ?[]const NegatedProperty {
+        if (set.start > self.negated_properties.items.len or
+            set.len > self.negated_properties.items.len - set.start)
+        {
+            return null;
+        }
+        return self.negated_properties.items[set.start..][0..set.len];
+    }
+
     /// Produces an allocation-free algebra view borrowing this query's storage.
     pub fn lower(self: *const Query) Algebra {
         return .{ .project = .{
             .projection = self.projection(),
-            .input = .{ .bgp = .{ .triples = self.patterns() } },
+            .input = .{ .bgp = .{
+                .triples = self.patterns(),
+                .paths = self.paths.items,
+                .negated_properties = self.negated_properties.items,
+            } },
         } };
     }
 
@@ -370,6 +460,8 @@ pub const Query = struct {
 
 pub const BasicGraphPattern = struct {
     triples: []const TriplePattern,
+    paths: []const Path,
+    negated_properties: []const NegatedProperty,
 };
 
 pub const Project = struct {
@@ -389,7 +481,7 @@ pub const Algebra = union(enum) {
 
 /// Parses the initial SPARQL 1.1 query slice: `SELECT`, optional
 /// `DISTINCT`/`REDUCED`, variable or wildcard projection, and an optional-`WHERE`
-/// basic graph pattern made from variables and IRI references.
+/// basic graph pattern with expanded RDF graph nodes and property paths.
 pub fn parseQuery(allocator: std.mem.Allocator, input: []const u8) ParseError!Query {
     var parser = Parser{
         .allocator = allocator,
@@ -555,14 +647,133 @@ const Parser = struct {
     }
 
     fn parsePredicate(self: *Parser) ParseError!PatternTerm {
+        if ((try self.peek()).tag == .variable) {
+            const token = try self.take();
+            return .{ .variable = try self.query.own(token.lexeme) };
+        }
+        const path_id = try self.parsePathAlternative();
+        return switch (self.query.paths.items[path_id]) {
+            .iri => |value| .{ .iri = value },
+            else => .{ .path = path_id },
+        };
+    }
+
+    fn parsePathAlternative(self: *Parser) ParseError!PathId {
+        var left = try self.parsePathSequence();
+        while ((try self.peek()).tag == .pipe) {
+            _ = try self.take();
+            const right = try self.parsePathSequence();
+            left = try self.addPath(.{ .alternative = .{ .left = left, .right = right } });
+        }
+        return left;
+    }
+
+    fn parsePathSequence(self: *Parser) ParseError!PathId {
+        var left = try self.parsePathEltOrInverse();
+        while ((try self.peek()).tag == .slash) {
+            _ = try self.take();
+            const right = try self.parsePathEltOrInverse();
+            left = try self.addPath(.{ .sequence = .{ .left = left, .right = right } });
+        }
+        return left;
+    }
+
+    fn parsePathEltOrInverse(self: *Parser) ParseError!PathId {
+        if ((try self.peek()).tag == .caret) {
+            _ = try self.take();
+            return self.addPath(.{ .inverse = try self.parsePathElt() });
+        }
+        return self.parsePathElt();
+    }
+
+    fn parsePathElt(self: *Parser) ParseError!PathId {
+        var path_id = try self.parsePathPrimary();
+        path_id = switch ((try self.peek()).tag) {
+            .star => modified: {
+                _ = try self.take();
+                break :modified try self.addPath(.{ .zero_or_more = path_id });
+            },
+            .plus => modified: {
+                _ = try self.take();
+                break :modified try self.addPath(.{ .one_or_more = path_id });
+            },
+            .question => modified: {
+                _ = try self.take();
+                break :modified try self.addPath(.{ .zero_or_one = path_id });
+            },
+            else => path_id,
+        };
+        return path_id;
+    }
+
+    fn parsePathPrimary(self: *Parser) ParseError!PathId {
         const token = try self.take();
         return switch (token.tag) {
-            .variable => .{ .variable = try self.query.own(token.lexeme) },
-            .iri_reference => .{ .iri = try self.resolveIri(token.lexeme) },
-            .prefixed_name => .{ .iri = try self.expandPrefixedName(token.lexeme) },
-            .keyword_a => .{ .iri = rdf_mod.rdf_namespace ++ "type" },
+            .iri_reference, .prefixed_name, .keyword_a => self.addPath(.{
+                .iri = try self.resolvePathIri(token),
+            }),
+            .left_parenthesis => grouped: {
+                const path_id = try self.parsePathAlternative();
+                try self.expect(.right_parenthesis);
+                break :grouped path_id;
+            },
+            .bang => self.parseNegatedPropertySet(),
             else => error.InvalidSyntax,
         };
+    }
+
+    fn parseNegatedPropertySet(self: *Parser) ParseError!PathId {
+        const start = self.query.negated_properties.items.len;
+        if ((try self.peek()).tag == .left_parenthesis) {
+            _ = try self.take();
+            if ((try self.peek()).tag != .right_parenthesis) {
+                while (true) {
+                    try self.parseNegatedProperty();
+                    if ((try self.peek()).tag != .pipe) break;
+                    _ = try self.take();
+                }
+            }
+            try self.expect(.right_parenthesis);
+        } else {
+            try self.parseNegatedProperty();
+        }
+        return self.addPath(.{ .negated_property_set = .{
+            .start = start,
+            .len = self.query.negated_properties.items.len - start,
+        } });
+    }
+
+    fn parseNegatedProperty(self: *Parser) ParseError!void {
+        var inverse = false;
+        if ((try self.peek()).tag == .caret) {
+            _ = try self.take();
+            inverse = true;
+        }
+        const token = try self.take();
+        if (token.tag != .iri_reference and token.tag != .prefixed_name and
+            token.tag != .keyword_a)
+        {
+            return error.InvalidSyntax;
+        }
+        try self.query.negated_properties.append(self.allocator, .{
+            .iri = try self.resolvePathIri(token),
+            .inverse = inverse,
+        });
+    }
+
+    fn resolvePathIri(self: *Parser, token: Token) ParseError![]const u8 {
+        return switch (token.tag) {
+            .iri_reference => self.resolveIri(token.lexeme),
+            .prefixed_name => self.expandPrefixedName(token.lexeme),
+            .keyword_a => rdf_mod.rdf_namespace ++ "type",
+            else => error.InvalidSyntax,
+        };
+    }
+
+    fn addPath(self: *Parser, path: Path) ParseError!PathId {
+        const id = self.query.paths.items.len;
+        try self.query.paths.append(self.allocator, path);
+        return id;
     }
 
     fn freshAnonymousBlankNode(self: *Parser) PatternTerm {
@@ -762,22 +973,48 @@ fn isWhitespace(byte: u8) bool {
 }
 
 fn canStartPredicate(tag: TokenTag) bool {
-    return tag == .variable or tag == .iri_reference or tag == .prefixed_name or
-        tag == .keyword_a;
+    return tag == .variable or canStartPath(tag);
+}
+
+fn canStartPath(tag: TokenTag) bool {
+    return tag == .iri_reference or tag == .prefixed_name or tag == .keyword_a or
+        tag == .caret or tag == .bang or tag == .left_parenthesis;
 }
 
 fn isDelimiter(byte: u8) bool {
     return isWhitespace(byte) or byte == '#' or byte == '{' or byte == '}' or
         byte == '.' or byte == '*' or byte == '<' or byte == '>' or byte == '?' or
         byte == '$' or byte == '(' or byte == ')' or byte == '[' or byte == ']' or
-        byte == ';' or byte == ',';
+        byte == ';' or byte == ',' or byte == '/' or byte == '|' or byte == '!' or
+        byte == '^' or byte == '+';
 }
 
 fn isWordDelimiter(byte: u8) bool {
     return isWhitespace(byte) or byte == '#' or byte == '{' or byte == '}' or
         byte == '*' or byte == '<' or byte == '>' or byte == '?' or byte == '$' or
         byte == '(' or byte == ')' or byte == '[' or byte == ']' or byte == ';' or
-        byte == ',';
+        byte == ',' or byte == '/' or byte == '|' or byte == '!' or byte == '^' or
+        byte == '+';
+}
+
+fn isNumericExponentPrefix(value: []const u8) bool {
+    if (value.len < 2 or (value[value.len - 1] != 'e' and value[value.len - 1] != 'E')) {
+        return false;
+    }
+    var index: usize = 0;
+    if (value[index] == '+' or value[index] == '-') index += 1;
+    var digits: usize = 0;
+    var saw_dot = false;
+    while (index + 1 < value.len) : (index += 1) {
+        if (std.ascii.isDigit(value[index])) {
+            digits += 1;
+        } else if (value[index] == '.' and !saw_dot) {
+            saw_dot = true;
+        } else {
+            return false;
+        }
+    }
+    return digits > 0;
 }
 
 fn classifyNumeric(value: []const u8) ?TokenTag {
@@ -1278,6 +1515,35 @@ test "expands RDF collections and handles rdf:nil" {
     );
 }
 
+test "parses property-path precedence modifiers inverse and negated sets" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "PREFIX ex: <https://example.com/> SELECT * { " ++
+            "?s (^ex:p/ex:q+|!(ex:r|^a))? ?o . ?s ex:z* ?o }",
+    );
+    defer query.deinit();
+
+    const root_id = query.patterns()[0].predicate.path;
+    const alternative_id = query.path(root_id).?.zero_or_one;
+    const alternative = query.path(alternative_id).?.alternative;
+    const sequence = query.path(alternative.left).?.sequence;
+    try std.testing.expect(query.path(sequence.left).? == .inverse);
+    try std.testing.expect(query.path(sequence.right).? == .one_or_more);
+
+    const negated = query.path(alternative.right).?.negated_property_set;
+    const properties = query.negatedPropertySet(negated).?;
+    try std.testing.expectEqual(@as(usize, 2), properties.len);
+    try std.testing.expectEqualStrings("https://example.com/r", properties[0].iri);
+    try std.testing.expect(!properties[0].inverse);
+    try std.testing.expectEqualStrings(rdf_mod.rdf_namespace ++ "type", properties[1].iri);
+    try std.testing.expect(properties[1].inverse);
+    try std.testing.expect(query.path(query.patterns()[1].predicate.path).? == .zero_or_more);
+
+    const lowered = query.lower().project.input.bgp;
+    try std.testing.expect(lowered.paths.len > 0);
+    try std.testing.expectEqual(@as(usize, 2), lowered.negated_properties.len);
+}
+
 test "lowers SELECT syntax to project over a BGP" {
     var query = try parseQuery(std.testing.allocator, "SELECT ?s WHERE { ?s <urn:p> <urn:o> }");
     defer query.deinit();
@@ -1296,7 +1562,9 @@ test "rejects malformed or unsupported query syntax" {
         "SELECT * { ?s <urn:p> \"value\"@en--US }",             "SELECT * { ?s <urn:p> \"value\"^^_:datatype }", "SELECT * { _:trailing. <urn:p> <urn:o> }",
         "SELECT * { ?s <urn:p> \"\\uD800\" }",                  "SELECT * { ?s <urn:\\U00110000> ?o }",          "SELECT * { ?s <urn:p> <urn:o>, }",
         "SELECT * { ?s ; <urn:p> <urn:o> }",                    "SELECT * { [] }",                               "SELECT * { ?s <urn:p> ( <urn:a> }",
-        "SELECT * { [ <urn:p> <urn:o> }",
+        "SELECT * { [ <urn:p> <urn:o> }",                       "SELECT * { ?s <urn:p>/ ?o }",                   "SELECT * { ?s <urn:p>** ?o }",
+        "SELECT * { ?s ^ ?o }",                                 "SELECT * { ?s !(<urn:p>/<urn:q>) ?o }",         "SELECT * { ?s ?p* ?o }",
+        "SELECT * { ?s () ?o }",                                "SELECT * { ?s |<urn:p> ?o }",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -1311,7 +1579,7 @@ test "query parsing handles every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, expectQueryParses, .{
         "BASE <https://example.com/root/> PREFIX ex: <vocab/> " ++
             "SELECT DISTINCT ?s ?o WHERE { " ++
-            "[ ex:inner \"hello\\n\"@EN ] ex:p (12.5 true) ; " ++
+            "[ ex:inner \"hello\\n\"@EN ] (^ex:p/ex:item+|!(ex:skip|^a))? (12.5 true) ; " ++
             "ex:q ?o, \"value\"^^ex:kind . }",
     });
 }
