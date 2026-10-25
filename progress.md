@@ -182,7 +182,7 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 137 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 138 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -204,21 +204,19 @@ separate packages only after their APIs and release cycles become independently 
   FILTER, BIND, nested groups, OPTIONAL, UNION, MINUS, EXISTS/NOT EXISTS, SELECT
   subqueries, ASK, CONSTRUCT WHERE, dataset clauses, GROUP BY aliases, HAVING, ORDER BY,
   LIMIT/OFFSET, inline/trailing VALUES, GRAPH, and SERVICE/SERVICE SILENT; all 97 cases
-  in the pinned query-syntax manifest pass; core term, numeric, string, regex, and
-  RDF-literal constructor built-ins have strict signatures, while remaining grammar and
-  query evaluation are incomplete.
+  in the pinned query-syntax manifest pass; every SPARQL 1.1 built-in call has a strict
+  syntax signature, while remaining query forms and evaluation are incomplete.
 - Milestones 8–14: not started.
 
 ## Milestone 7 fixed plan
 
-Milestone 7 contains 31 tracked increments. After step 7.4.10, 16 are complete and 15
+Milestone 7 contains 31 tracked increments. After step 7.4.11, 17 are complete and 14
 remain. The fixed breakdown is:
 
 - 7.1 — parser/algebra foundation: complete.
 - 7.2 — pinned W3C syntax baseline: complete.
 - 7.3.1–7.3.4 — terms, graph nodes, shorthand, and property paths: complete.
-- 7.4.1–7.4.10 — expressions through string and constructor built-ins: complete.
-- 7.4.11 — temporal, hash, UUID, and conditional built-ins.
+- 7.4.1–7.4.11 — complete SPARQL built-in expression syntax: complete.
 - 7.4.12 — DESCRIBE and explicit CONSTRUCT templates.
 - 7.4.13 — syntax closure, differential checks, and parser hardening.
 - 7.5.1–7.5.7 — solution mappings/BGP; expressions; joins and optional operators;
@@ -231,9 +229,9 @@ work should replace or explicitly revise this list rather than silently extendin
 
 ## Next actions
 
-1. Implement temporal, hash, UUID, and conditional built-ins (7.4.11), then add
-   DESCRIBE and explicit CONSTRUCT templates (7.4.12).
-2. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
+1. Add DESCRIBE and explicit CONSTRUCT templates (7.4.12).
+2. Close remaining syntax gaps and harden the parser (7.4.13).
+3. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
    store.
 
 ## Session log
@@ -1038,3 +1036,17 @@ work should replace or explicitly revise this list rather than silently extendin
 - Advanced the fixed milestone plan to 16 of 31 increments complete, with 15 remaining.
 - Retained the 97/97 W3C query-syntax baseline; the local suite now has 137 tests and
   the complete build passes all 143 tests.
+
+### 2026-10-25 — SPARQL temporal and conditional built-ins
+
+- Added YEAR, MONTH, DAY, HOURS, MINUTES, SECONDS, TIMEZONE, and TZ temporal calls.
+- Added zero-argument NOW, UUID, and STRUUID calls plus unary MD5, SHA1, SHA256, SHA384,
+  and SHA512 calls.
+- Added variadic COALESCE and exactly ternary IF signatures.
+- Completed every built-in spelling in SPARQL 1.1 grammar production 121 at the
+  syntax/AST level with centralized signature validation.
+- Added normalized-name, nested conditional/hash, empty variadic, malformed-arity, and
+  exhaustive allocation-failure coverage.
+- Advanced the fixed milestone plan to 17 of 31 increments complete, with 14 remaining.
+- Retained the 97/97 W3C query-syntax baseline; the local suite now has 138 tests and
+  the complete build passes all 144 tests.

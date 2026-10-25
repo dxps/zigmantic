@@ -1746,6 +1746,7 @@ const Parser = struct {
             .zero => arguments.len == 0,
             .unary => arguments.len == 1,
             .binary => arguments.len == 2,
+            .ternary => arguments.len == 3,
             .zero_or_one => arguments.len <= 1,
             .any => true,
             .two_or_three => arguments.len == 2 or arguments.len == 3,
@@ -2636,6 +2637,7 @@ const BuiltinSignature = enum {
     zero,
     unary,
     binary,
+    ternary,
     zero_or_one,
     any,
     two_or_three,
@@ -2649,10 +2651,13 @@ fn isBuiltinFunction(value: []const u8) bool {
 
 fn builtinSignature(value: []const u8) ?BuiltinSignature {
     const unary = [_][]const u8{
-        "str",   "lang",    "datatype",       "iri",       "uri",
-        "abs",   "ceil",    "floor",          "round",     "isiri",
-        "isuri", "isblank", "isliteral",      "isnumeric", "strlen",
-        "ucase", "lcase",   "encode_for_uri",
+        "str",    "lang",    "datatype",       "iri",       "uri",
+        "abs",    "ceil",    "floor",          "round",     "isiri",
+        "isuri",  "isblank", "isliteral",      "isnumeric", "strlen",
+        "ucase",  "lcase",   "encode_for_uri", "year",      "month",
+        "day",    "hours",   "minutes",        "seconds",   "timezone",
+        "tz",     "md5",     "sha1",           "sha256",    "sha384",
+        "sha512",
     };
     for (unary) |name| {
         if (std.ascii.eqlIgnoreCase(value, name)) return .unary;
@@ -2664,12 +2669,17 @@ fn builtinSignature(value: []const u8) ?BuiltinSignature {
     for (binary) |name| {
         if (std.ascii.eqlIgnoreCase(value, name)) return .binary;
     }
-    if (std.ascii.eqlIgnoreCase(value, "concat")) return .any;
+    if (std.ascii.eqlIgnoreCase(value, "concat") or
+        std.ascii.eqlIgnoreCase(value, "coalesce")) return .any;
     if (std.ascii.eqlIgnoreCase(value, "substr") or
         std.ascii.eqlIgnoreCase(value, "regex")) return .two_or_three;
     if (std.ascii.eqlIgnoreCase(value, "replace")) return .three_or_four;
     if (std.ascii.eqlIgnoreCase(value, "bnode")) return .zero_or_one;
-    if (std.ascii.eqlIgnoreCase(value, "rand")) return .zero;
+    if (std.ascii.eqlIgnoreCase(value, "rand") or
+        std.ascii.eqlIgnoreCase(value, "now") or
+        std.ascii.eqlIgnoreCase(value, "uuid") or
+        std.ascii.eqlIgnoreCase(value, "struuid")) return .zero;
+    if (std.ascii.eqlIgnoreCase(value, "if")) return .ternary;
     if (std.ascii.eqlIgnoreCase(value, "bound")) return .bound_variable;
     return null;
 }
@@ -3367,6 +3377,33 @@ test "parses string regex and RDF literal constructor built-ins" {
     try std.testing.expectEqualStrings("strdt", constructor.function);
 }
 
+test "parses temporal hash UUID and conditional built-ins" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "SELECT (YEAR(?date) AS ?year) (TIMEZONE(?date) AS ?zone) " ++
+            "(NOW() AS ?now) (UUID() AS ?uuid) (STRUUID() AS ?uuid_text) " ++
+            "(SHA256(?x) AS ?hash) (COALESCE() AS ?empty) " ++
+            "(COALESCE(?x, 'fallback') AS ?choice) " ++
+            "(IF(BOUND(?x), ?x, 'missing') AS ?conditional) {}",
+    );
+    defer query.deinit();
+
+    const items = query.projection().items;
+    try std.testing.expectEqual(@as(usize, 9), items.len);
+    const now = query.expression(items[2].expression.expression).?.call;
+    try std.testing.expectEqualStrings("now", now.function);
+    try std.testing.expectEqual(@as(usize, 0), now.arguments.len);
+    const hash = query.expression(items[5].expression.expression).?.call;
+    try std.testing.expectEqualStrings("sha256", hash.function);
+    try std.testing.expectEqual(@as(usize, 1), hash.arguments.len);
+    const empty = query.expression(items[6].expression.expression).?.call;
+    try std.testing.expectEqualStrings("coalesce", empty.function);
+    try std.testing.expectEqual(@as(usize, 0), empty.arguments.len);
+    const conditional = query.expression(items[8].expression.expression).?.call;
+    try std.testing.expectEqualStrings("if", conditional.function);
+    try std.testing.expectEqual(@as(usize, 3), conditional.arguments.len);
+}
+
 test "parses relational logical and membership expressions in FILTER" {
     var query = try parseQuery(
         std.testing.allocator,
@@ -3626,7 +3663,10 @@ test "rejects malformed or unsupported query syntax" {
         "SELECT (sameTerm(?x, ?y, ?z) AS ?same) {}",              "SELECT (isIRI(*) AS ?test) {}",                                      "SELECT (STR(DISTINCT ?x) AS ?value) {}",
         "SELECT (SUBSTR(?x) AS ?value) {}",                       "SELECT (SUBSTR(?x, 1, 2, 3) AS ?value) {}",                          "SELECT (REGEX(?x) AS ?match) {}",
         "SELECT (REPLACE(?x, 'a') AS ?value) {}",                 "SELECT (REPLACE(?x, 'a', 'b', 'i', 'x') AS ?value) {}",              "SELECT (STRLANG(?x) AS ?value) {}",
-        "SELECT (CONTAINS(?x, 'a', 'b') AS ?value) {}",           "SELECT (CONCAT(DISTINCT ?x) AS ?value) {}",
+        "SELECT (CONTAINS(?x, 'a', 'b') AS ?value) {}",           "SELECT (CONCAT(DISTINCT ?x) AS ?value) {}",                          "SELECT (NOW(1) AS ?value) {}",
+        "SELECT (YEAR() AS ?value) {}",                           "SELECT (YEAR(?x, ?y) AS ?value) {}",                                 "SELECT (IF(?x, ?y) AS ?value) {}",
+        "SELECT (IF(?w, ?x, ?y, ?z) AS ?value) {}",               "SELECT (SHA256(?x, ?y) AS ?value) {}",                               "SELECT (COALESCE(DISTINCT ?x) AS ?value) {}",
+        "SELECT (COALESCE(*) AS ?value) {}",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -3642,7 +3682,8 @@ test "query parsing handles every allocation failure" {
         "BASE <https://example.com/root/> PREFIX ex: <vocab/> " ++
             "SELECT DISTINCT ?s (?s + COUNT(ex:function(?o, 2)) AS ?value) " ++
             "(BOUND(?s) AS ?present) (ABS(-2) AS ?magnitude) " ++
-            "(REPLACE(STR(?s), 'a', 'b', 'i') AS ?replaced) WHERE { " ++
+            "(REPLACE(STR(?s), 'a', 'b', 'i') AS ?replaced) " ++
+            "(IF(BOUND(?s), SHA256(STR(?s)), '') AS ?digest) WHERE { " ++
             "[ ex:inner \"hello\\n\"@EN ] (^ex:p/ex:item+|!(ex:skip|^a))? (12.5 true) ; " ++
             "ex:q ?o, \"value\"^^ex:kind . " ++
             "FILTER(?o NOT IN(1, 2)) BIND(?o+1 AS ?bound) " ++

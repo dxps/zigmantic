@@ -45,10 +45,9 @@ evaluation will require a caller-supplied service interface.
 ## Expressions
 
 Operator precedence, RDF terms, variables, custom IRI calls, `IN`/`NOT IN`, EXISTS,
-NOT EXISTS, all seven aggregate spellings, and the core term/numeric built-ins are
-represented with function-specific signatures. Production 121 remains incomplete:
-date/time, hash, UUID, and conditional built-ins still need syntax validation. All
-built-ins still require evaluation semantics.
+NOT EXISTS, all seven aggregate spellings, and every built-in call in production 121
+are represented with function-specific signatures. Built-in evaluation semantics are
+not yet implemented.
 
 ## Data and lexical grammar
 
@@ -82,8 +81,8 @@ section 18. Evaluation is not implemented. Remaining execution work includes:
 
 ## Planned implementation order
 
-1. Complete built-in expression syntax and arity validation.
-2. Add DESCRIBE and explicit CONSTRUCT templates.
+1. Add DESCRIBE and explicit CONSTRUCT templates.
+2. Close remaining syntax gaps and run differential parser checks.
 3. Freeze the first evaluation-ready AST/algebra boundary, then implement solution
    mappings and BGP evaluation over the indexed store.
 

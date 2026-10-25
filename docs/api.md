@@ -170,6 +170,12 @@ ENCODE_FOR_URI, CONTAINS, STRSTARTS, STRENDS, STRBEFORE, STRAFTER, and REGEX. ST
 and STRDT provide the RDF-literal constructor syntax. Their signatures retain the
 grammar's variadic, optional-final-argument, unary, and binary distinctions.
 
+Temporal extraction covers YEAR, MONTH, DAY, HOURS, MINUTES, SECONDS, TIMEZONE, and TZ.
+NOW, UUID, and STRUUID are zero-argument calls; MD5 and the SHA family are unary.
+COALESCE retains an arbitrary expression list and IF requires exactly three arguments.
+Together with EXISTS/NOT EXISTS and aggregates, this completes SPARQL 1.1 production
+121 at the syntax/AST level; evaluation semantics are not yet implemented.
+
 Expression precedence additionally covers comparison, equality, conditional-and,
 conditional-or, and `IN`/`NOT IN` membership. Membership value lists use the same safe
 argument-range API as calls.
