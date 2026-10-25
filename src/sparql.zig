@@ -32,6 +32,12 @@ pub const TokenTag = enum {
     named,
     group_keyword,
     by,
+    having,
+    order,
+    ascending,
+    descending,
+    limit,
+    offset_keyword,
     values_keyword,
     undef,
     variable,
@@ -384,6 +390,18 @@ pub const Tokenizer = struct {
             .group_keyword
         else if (std.ascii.eqlIgnoreCase(lexeme, "BY"))
             .by
+        else if (std.ascii.eqlIgnoreCase(lexeme, "HAVING"))
+            .having
+        else if (std.ascii.eqlIgnoreCase(lexeme, "ORDER"))
+            .order
+        else if (std.ascii.eqlIgnoreCase(lexeme, "ASC"))
+            .ascending
+        else if (std.ascii.eqlIgnoreCase(lexeme, "DESC"))
+            .descending
+        else if (std.ascii.eqlIgnoreCase(lexeme, "LIMIT"))
+            .limit
+        else if (std.ascii.eqlIgnoreCase(lexeme, "OFFSET"))
+            .offset_keyword
         else if (std.ascii.eqlIgnoreCase(lexeme, "VALUES"))
             .values_keyword
         else if (std.ascii.eqlIgnoreCase(lexeme, "UNDEF"))
@@ -515,6 +533,31 @@ pub const ExpressionRange = struct {
     len: usize,
 };
 
+pub const SolutionRange = struct {
+    start: usize = 0,
+    len: usize = 0,
+};
+
+pub const GroupCondition = struct {
+    expression: ExpressionId,
+    alias: ?[]const u8 = null,
+};
+
+pub const OrderDirection = enum { default, ascending, descending };
+
+pub const OrderCondition = struct {
+    expression: ExpressionId,
+    direction: OrderDirection = .default,
+};
+
+pub const SolutionModifiers = struct {
+    group_by: SolutionRange = .{},
+    having: SolutionRange = .{},
+    order_by: SolutionRange = .{},
+    limit: ?usize = null,
+    offset: ?usize = null,
+};
+
 pub const FunctionCall = struct {
     function: []const u8,
     arguments: ExpressionRange,
@@ -581,7 +624,7 @@ pub const Subquery = struct {
     projection_variables: []const []const u8,
     projection_items: []const ProjectionItem,
     group: GroupId,
-    group_by: ExpressionRange,
+    solution: SolutionModifiers,
     trailing_values: ?ValuesId,
 
     pub fn projection(self: Subquery) Projection {
@@ -653,12 +696,15 @@ pub const Query = struct {
     values_blocks: std.ArrayList(ValuesBlock) = .empty,
     root_group: ?GroupId = null,
     dataset_clauses: std.ArrayList(DatasetClause) = .empty,
-    group_by: ExpressionRange = .{ .start = 0, .len = 0 },
+    solution: SolutionModifiers = .{},
     trailing_values: ?ValuesId = null,
     paths: std.ArrayList(Path) = .empty,
     negated_properties: std.ArrayList(NegatedProperty) = .empty,
     expressions: std.ArrayList(Expression) = .empty,
     expression_arguments: std.ArrayList(ExpressionId) = .empty,
+    group_conditions: std.ArrayList(GroupCondition) = .empty,
+    having_conditions: std.ArrayList(ExpressionId) = .empty,
+    order_conditions: std.ArrayList(OrderCondition) = .empty,
     owned_strings: std.ArrayList([]u8) = .empty,
     next_blank_node: usize = 0,
 
@@ -694,6 +740,9 @@ pub const Query = struct {
         self.negated_properties.deinit(self.allocator);
         self.expressions.deinit(self.allocator);
         self.expression_arguments.deinit(self.allocator);
+        self.group_conditions.deinit(self.allocator);
+        self.having_conditions.deinit(self.allocator);
+        self.order_conditions.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -759,8 +808,37 @@ pub const Query = struct {
         return self.values(self.trailing_values orelse return null);
     }
 
-    pub fn groupBy(self: *const Query) []const ExpressionId {
-        return self.expressionArguments(self.group_by) orelse unreachable;
+    pub fn groupBy(self: *const Query) []const GroupCondition {
+        return self.groupConditions(self.solution.group_by) orelse unreachable;
+    }
+
+    pub fn having(self: *const Query) []const ExpressionId {
+        return self.havingConditions(self.solution.having) orelse unreachable;
+    }
+
+    pub fn orderBy(self: *const Query) []const OrderCondition {
+        return self.orderConditions(self.solution.order_by) orelse unreachable;
+    }
+
+    pub fn groupConditions(
+        self: *const Query,
+        range: SolutionRange,
+    ) ?[]const GroupCondition {
+        return rangeSlice(GroupCondition, self.group_conditions.items, range);
+    }
+
+    pub fn havingConditions(
+        self: *const Query,
+        range: SolutionRange,
+    ) ?[]const ExpressionId {
+        return rangeSlice(ExpressionId, self.having_conditions.items, range);
+    }
+
+    pub fn orderConditions(
+        self: *const Query,
+        range: SolutionRange,
+    ) ?[]const OrderCondition {
+        return rangeSlice(OrderCondition, self.order_conditions.items, range);
     }
 
     pub fn negatedPropertySet(
@@ -784,6 +862,10 @@ pub const Query = struct {
                 .input = input,
                 .datasets = self.dataset_clauses.items,
                 .group_by = self.groupBy(),
+                .having = self.having(),
+                .order_by = self.orderBy(),
+                .limit = self.solution.limit,
+                .offset = self.solution.offset,
                 .trailing_values = self.trailingValues(),
                 .expressions = self.expressions.items,
                 .expression_arguments = self.expression_arguments.items,
@@ -792,6 +874,10 @@ pub const Query = struct {
                 .input = input,
                 .datasets = self.dataset_clauses.items,
                 .group_by = self.groupBy(),
+                .having = self.having(),
+                .order_by = self.orderBy(),
+                .limit = self.solution.limit,
+                .offset = self.solution.offset,
                 .trailing_values = self.trailingValues(),
                 .expressions = self.expressions.items,
                 .expression_arguments = self.expression_arguments.items,
@@ -800,6 +886,10 @@ pub const Query = struct {
                 .input = input,
                 .datasets = self.dataset_clauses.items,
                 .group_by = self.groupBy(),
+                .having = self.having(),
+                .order_by = self.orderBy(),
+                .limit = self.solution.limit,
+                .offset = self.solution.offset,
                 .trailing_values = self.trailingValues(),
                 .expressions = self.expressions.items,
                 .expression_arguments = self.expression_arguments.items,
@@ -852,7 +942,11 @@ pub const Project = struct {
     projection: Projection,
     input: AlgebraInput,
     datasets: []const DatasetClause,
-    group_by: []const ExpressionId,
+    group_by: []const GroupCondition,
+    having: []const ExpressionId,
+    order_by: []const OrderCondition,
+    limit: ?usize,
+    offset: ?usize,
     trailing_values: ?ValuesBlock,
     expressions: []const Expression,
     expression_arguments: []const ExpressionId,
@@ -861,7 +955,11 @@ pub const Project = struct {
 pub const Ask = struct {
     input: AlgebraInput,
     datasets: []const DatasetClause,
-    group_by: []const ExpressionId,
+    group_by: []const GroupCondition,
+    having: []const ExpressionId,
+    order_by: []const OrderCondition,
+    limit: ?usize,
+    offset: ?usize,
     trailing_values: ?ValuesBlock,
     expressions: []const Expression,
     expression_arguments: []const ExpressionId,
@@ -870,7 +968,11 @@ pub const Ask = struct {
 pub const Construct = struct {
     input: AlgebraInput,
     datasets: []const DatasetClause,
-    group_by: []const ExpressionId,
+    group_by: []const GroupCondition,
+    having: []const ExpressionId,
+    order_by: []const OrderCondition,
+    limit: ?usize,
+    offset: ?usize,
     trailing_values: ?ValuesBlock,
     expressions: []const Expression,
     expression_arguments: []const ExpressionId,
@@ -947,39 +1049,181 @@ const Parser = struct {
             },
             else => return error.InvalidSyntax,
         }
-        self.query.group_by = try self.parseGroupBy();
+        self.query.solution = try self.parseSolutionModifiers();
         if ((try self.peek()).tag == .values_keyword) {
             self.query.trailing_values = try self.parseValuesClause();
         }
         if (self.query.form == .select and !self.projectionAliasesAreValid(
             self.query.projection_items.items,
             self.query.root_group.?,
+            self.query.solution.group_by,
+            self.query.trailing_values,
+        )) return error.InvalidSyntax;
+        if (!self.groupAliasesAreValid(
+            self.query.solution.group_by,
+            self.query.root_group.?,
             self.query.trailing_values,
         )) return error.InvalidSyntax;
         if (self.query.form == .select and !self.groupedProjectionIsValid(
             self.query.projection_items.items,
             self.query.select_all,
-            self.query.group_by,
+            self.query.solution.group_by,
             self.query.trailing_values,
         )) return error.InvalidSyntax;
         try self.expect(.eof);
     }
 
-    fn parseGroupBy(self: *Parser) ParseError!ExpressionRange {
+    fn parseSolutionModifiers(self: *Parser) ParseError!SolutionModifiers {
+        var result = SolutionModifiers{
+            .group_by = try self.parseGroupBy(),
+            .having = try self.parseHaving(),
+            .order_by = try self.parseOrderBy(),
+        };
+        while (true) switch ((try self.peek()).tag) {
+            .limit => {
+                if (result.limit != null) return error.InvalidSyntax;
+                _ = try self.take();
+                result.limit = try self.parseUnsignedInteger();
+            },
+            .offset_keyword => {
+                if (result.offset != null) return error.InvalidSyntax;
+                _ = try self.take();
+                result.offset = try self.parseUnsignedInteger();
+            },
+            else => return result,
+        };
+    }
+
+    fn parseGroupBy(self: *Parser) ParseError!SolutionRange {
+        const start = self.query.group_conditions.items.len;
         if ((try self.peek()).tag != .group_keyword) {
-            return .{ .start = self.query.expression_arguments.items.len, .len = 0 };
+            return .{ .start = start, .len = 0 };
         }
         _ = try self.take();
         try self.expect(.by);
-        var expressions: std.ArrayList(ExpressionId) = .empty;
-        defer expressions.deinit(self.allocator);
         while (canStartGroupCondition((try self.peek()).tag)) {
-            try expressions.append(self.allocator, try self.parseExpression());
+            try self.query.group_conditions.append(
+                self.allocator,
+                try self.parseGroupCondition(start),
+            );
         }
-        if (expressions.items.len == 0) return error.InvalidSyntax;
-        const start = self.query.expression_arguments.items.len;
-        try self.query.expression_arguments.appendSlice(self.allocator, expressions.items);
-        return .{ .start = start, .len = expressions.items.len };
+        const len = self.query.group_conditions.items.len - start;
+        if (len == 0) return error.InvalidSyntax;
+        return .{ .start = start, .len = len };
+    }
+
+    fn parseGroupCondition(self: *Parser, start: usize) ParseError!GroupCondition {
+        if ((try self.peek()).tag == .left_parenthesis) {
+            _ = try self.take();
+            const expression_id = try self.parseExpression();
+            var alias: ?[]const u8 = null;
+            if ((try self.peek()).tag == .as) {
+                _ = try self.take();
+                const variable = try self.take();
+                if (variable.tag != .variable or
+                    self.groupConditionHasAlias(start, variable.lexeme))
+                {
+                    return error.InvalidSyntax;
+                }
+                alias = try self.query.own(variable.lexeme);
+            }
+            try self.expect(.right_parenthesis);
+            return .{ .expression = expression_id, .alias = alias };
+        }
+
+        const first_tag = (try self.peek()).tag;
+        const expression_id = try self.parseExpression();
+        if (first_tag != .variable and self.query.expressions.items[expression_id] != .call) {
+            return error.InvalidSyntax;
+        }
+        return .{ .expression = expression_id };
+    }
+
+    fn groupConditionHasAlias(self: *const Parser, start: usize, name: []const u8) bool {
+        for (self.query.group_conditions.items[start..]) |condition| {
+            if (condition.alias) |alias| {
+                if (std.mem.eql(u8, alias, name)) return true;
+            }
+        }
+        return false;
+    }
+
+    fn parseHaving(self: *Parser) ParseError!SolutionRange {
+        const start = self.query.having_conditions.items.len;
+        if ((try self.peek()).tag != .having) return .{ .start = start, .len = 0 };
+        _ = try self.take();
+        while (canStartConstraint((try self.peek()).tag)) {
+            try self.query.having_conditions.append(
+                self.allocator,
+                try self.parseConstraint(),
+            );
+        }
+        const len = self.query.having_conditions.items.len - start;
+        if (len == 0) return error.InvalidSyntax;
+        return .{ .start = start, .len = len };
+    }
+
+    fn parseOrderBy(self: *Parser) ParseError!SolutionRange {
+        const start = self.query.order_conditions.items.len;
+        if ((try self.peek()).tag != .order) return .{ .start = start, .len = 0 };
+        _ = try self.take();
+        try self.expect(.by);
+        while (canStartOrderCondition((try self.peek()).tag)) {
+            try self.query.order_conditions.append(
+                self.allocator,
+                try self.parseOrderCondition(),
+            );
+        }
+        const len = self.query.order_conditions.items.len - start;
+        if (len == 0) return error.InvalidSyntax;
+        return .{ .start = start, .len = len };
+    }
+
+    fn parseOrderCondition(self: *Parser) ParseError!OrderCondition {
+        const direction: OrderDirection = switch ((try self.peek()).tag) {
+            .ascending => direction: {
+                _ = try self.take();
+                break :direction .ascending;
+            },
+            .descending => direction: {
+                _ = try self.take();
+                break :direction .descending;
+            },
+            else => .default,
+        };
+        if (direction != .default) {
+            try self.expect(.left_parenthesis);
+            const expression_id = try self.parseExpression();
+            try self.expect(.right_parenthesis);
+            return .{ .expression = expression_id, .direction = direction };
+        }
+        return .{ .expression = try self.parseConstraintOrVariable() };
+    }
+
+    fn parseConstraintOrVariable(self: *Parser) ParseError!ExpressionId {
+        if ((try self.peek()).tag == .variable) return self.parseExpression();
+        return self.parseConstraint();
+    }
+
+    fn parseConstraint(self: *Parser) ParseError!ExpressionId {
+        const bracketed = (try self.peek()).tag == .left_parenthesis;
+        const expression_id = try self.parseExpression();
+        if (!bracketed and self.query.expressions.items[expression_id] != .call and
+            self.query.expressions.items[expression_id] != .exists)
+        {
+            return error.InvalidSyntax;
+        }
+        return expression_id;
+    }
+
+    fn parseUnsignedInteger(self: *Parser) ParseError!usize {
+        const token = try self.take();
+        if (token.tag != .integer or token.lexeme.len == 0 or
+            token.lexeme[0] == '+' or token.lexeme[0] == '-')
+        {
+            return error.InvalidSyntax;
+        }
+        return std.fmt.parseInt(usize, token.lexeme, 10) catch return error.InvalidSyntax;
     }
 
     fn parseSelectClause(self: *Parser, target: ProjectionTarget) ParseError!void {
@@ -1557,18 +1801,26 @@ const Parser = struct {
         defer self.current_group = parent;
         try self.parseBasicGraphPattern();
         try self.expect(.right_brace);
-        const group_by = try self.parseGroupBy();
+        const solution = try self.parseSolutionModifiers();
         const trailing_values = if ((try self.peek()).tag == .values_keyword)
             try self.parseValuesClause()
         else
             null;
-        if (!self.projectionAliasesAreValid(projection_items.items, group_id, trailing_values)) {
+        if (!self.projectionAliasesAreValid(
+            projection_items.items,
+            group_id,
+            solution.group_by,
+            trailing_values,
+        )) {
+            return error.InvalidSyntax;
+        }
+        if (!self.groupAliasesAreValid(solution.group_by, group_id, trailing_values)) {
             return error.InvalidSyntax;
         }
         if (!self.groupedProjectionIsValid(
             projection_items.items,
             select_all,
-            group_by,
+            solution.group_by,
             trailing_values,
         )) return error.InvalidSyntax;
 
@@ -1587,7 +1839,7 @@ const Parser = struct {
             .projection_variables = variables,
             .projection_items = items,
             .group = group_id,
-            .group_by = group_by,
+            .solution = solution,
             .trailing_values = trailing_values,
         });
     }
@@ -1693,11 +1945,18 @@ const Parser = struct {
         self: *const Parser,
         items: []const ProjectionItem,
         group_id: GroupId,
+        group_by: SolutionRange,
         trailing_values: ?ValuesId,
     ) bool {
         for (items) |item| switch (item) {
             .expression => |value| {
                 if (self.groupContainsVariable(group_id, value.alias)) return false;
+                const grouped = self.query.groupConditions(group_by) orelse return false;
+                for (grouped) |condition| {
+                    if (condition.alias) |alias| {
+                        if (std.mem.eql(u8, alias, value.alias)) return false;
+                    }
+                }
                 if (trailing_values) |id| {
                     if (stringSliceContains(
                         self.query.values_blocks.items[id].variables,
@@ -1710,33 +1969,42 @@ const Parser = struct {
         return true;
     }
 
+    fn groupAliasesAreValid(
+        self: *const Parser,
+        group_by: SolutionRange,
+        group_id: GroupId,
+        trailing_values: ?ValuesId,
+    ) bool {
+        const grouped = self.query.groupConditions(group_by) orelse return false;
+        for (grouped) |condition| {
+            const alias = condition.alias orelse continue;
+            if (self.groupContainsVariable(group_id, alias)) return false;
+            if (trailing_values) |id| {
+                if (stringSliceContains(self.query.values_blocks.items[id].variables, alias)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     fn groupedProjectionIsValid(
         self: *const Parser,
         items: []const ProjectionItem,
         select_all: bool,
-        group_by: ExpressionRange,
+        group_by: SolutionRange,
         trailing_values: ?ValuesId,
     ) bool {
         if (group_by.len == 0) return true;
         if (select_all) return false;
-        const grouped = self.query.expressionArguments(group_by) orelse return false;
+        const grouped = rangeSlice(
+            GroupCondition,
+            self.query.group_conditions.items,
+            group_by,
+        ) orelse return false;
         for (items) |item| switch (item) {
             .variable => |name| {
-                var allowed = false;
-                for (grouped) |expression_id| switch (self.query.expressions.items[expression_id]) {
-                    .variable => |grouped_name| if (std.mem.eql(u8, grouped_name, name)) {
-                        allowed = true;
-                        break;
-                    },
-                    else => {},
-                };
-                if (!allowed and trailing_values != null) {
-                    allowed = stringSliceContains(
-                        self.query.values_blocks.items[trailing_values.?].variables,
-                        name,
-                    );
-                }
-                if (!allowed) return false;
+                if (!self.groupScopeContainsVariable(grouped, trailing_values, name)) return false;
             },
             .expression => |value| if (!self.expressionIsGroupScoped(
                 value.expression,
@@ -1750,7 +2018,7 @@ const Parser = struct {
     fn expressionIsGroupScoped(
         self: *const Parser,
         expression_id: ExpressionId,
-        grouped: []const ExpressionId,
+        grouped: []const GroupCondition,
         trailing_values: ?ValuesId,
     ) bool {
         return switch (self.query.expressions.items[expression_id]) {
@@ -1791,14 +2059,19 @@ const Parser = struct {
 
     fn groupScopeContainsVariable(
         self: *const Parser,
-        grouped: []const ExpressionId,
+        grouped: []const GroupCondition,
         trailing_values: ?ValuesId,
         name: []const u8,
     ) bool {
-        for (grouped) |expression_id| switch (self.query.expressions.items[expression_id]) {
-            .variable => |grouped_name| if (std.mem.eql(u8, grouped_name, name)) return true,
-            else => {},
-        };
+        for (grouped) |condition| {
+            if (condition.alias) |alias| {
+                if (std.mem.eql(u8, alias, name)) return true;
+            }
+            switch (self.query.expressions.items[condition.expression]) {
+                .variable => |grouped_name| if (std.mem.eql(u8, grouped_name, name)) return true,
+                else => {},
+            }
+        }
         if (trailing_values) |id| {
             return stringSliceContains(self.query.values_blocks.items[id].variables, name);
         }
@@ -2226,6 +2499,21 @@ fn canStartGroupNonTriple(tag: TokenTag) bool {
 fn canStartGroupCondition(tag: TokenTag) bool {
     return tag == .variable or tag == .left_parenthesis or tag == .identifier or
         tag == .iri_reference or tag == .prefixed_name;
+}
+
+fn canStartConstraint(tag: TokenTag) bool {
+    return tag == .left_parenthesis or tag == .identifier or tag == .iri_reference or
+        tag == .prefixed_name or tag == .exists or tag == .not;
+}
+
+fn canStartOrderCondition(tag: TokenTag) bool {
+    return canStartConstraint(tag) or tag == .variable or tag == .ascending or
+        tag == .descending;
+}
+
+fn rangeSlice(comptime T: type, items: []const T, range: SolutionRange) ?[]const T {
+    if (range.start > items.len or range.len > items.len - range.start) return null;
+    return items[range.start..][0..range.len];
 }
 
 fn stringSliceContains(values: []const []const u8, needle: []const u8) bool {
@@ -3026,7 +3314,10 @@ test "parses GROUP BY with trailing VALUES scope" {
     defer query.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), query.groupBy().len);
-    try std.testing.expectEqualStrings("s", query.expression(query.groupBy()[0]).?.variable);
+    try std.testing.expectEqualStrings(
+        "s",
+        query.expression(query.groupBy()[0].expression).?.variable,
+    );
     const values = query.trailingValues().?;
     try std.testing.expectEqual(@as(usize, 1), values.variables.len);
     try std.testing.expectEqualStrings("v", values.variables[0]);
@@ -3054,6 +3345,49 @@ test "preserves zero-arity and inline multi-variable VALUES blocks" {
     try std.testing.expect(values.value(0, 1).? == .undefined);
 }
 
+test "parses complete ordered solution modifiers" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "SELECT ?key (COUNT(*) AS ?count) { ?s ?p ?o } " ++
+            "GROUP BY (?s AS ?key) " ++
+            "HAVING (COUNT(*) > 1) " ++
+            "ORDER BY DESC(COUNT(*)) ASC(?key) ?key " ++
+            "LIMIT 10 OFFSET 2",
+    );
+    defer query.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), query.groupBy().len);
+    try std.testing.expectEqualStrings("key", query.groupBy()[0].alias.?);
+    try std.testing.expectEqual(@as(usize, 1), query.having().len);
+    try std.testing.expectEqual(@as(usize, 3), query.orderBy().len);
+    try std.testing.expectEqual(OrderDirection.descending, query.orderBy()[0].direction);
+    try std.testing.expectEqual(OrderDirection.ascending, query.orderBy()[1].direction);
+    try std.testing.expectEqual(OrderDirection.default, query.orderBy()[2].direction);
+    try std.testing.expectEqual(@as(?usize, 10), query.solution.limit);
+    try std.testing.expectEqual(@as(?usize, 2), query.solution.offset);
+
+    const lowered = query.lower().project;
+    try std.testing.expectEqual(@as(usize, 1), lowered.having.len);
+    try std.testing.expectEqual(@as(usize, 3), lowered.order_by.len);
+    try std.testing.expectEqual(@as(?usize, 10), lowered.limit);
+    try std.testing.expectEqual(@as(?usize, 2), lowered.offset);
+}
+
+test "preserves solution modifiers on SELECT subqueries" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "SELECT * { SELECT ?s { ?s ?p ?o } ORDER BY ?s OFFSET 3 LIMIT 1 }",
+    );
+    defer query.deinit();
+
+    const root = query.groupElements(query.root_group.?).?;
+    const subquery = query.subquery(root[0].subquery).?;
+    const ordering = query.orderConditions(subquery.solution.order_by).?;
+    try std.testing.expectEqual(@as(usize, 1), ordering.len);
+    try std.testing.expectEqual(@as(?usize, 1), subquery.solution.limit);
+    try std.testing.expectEqual(@as(?usize, 3), subquery.solution.offset);
+}
+
 test "rejects malformed or unsupported query syntax" {
     const invalid = [_][]const u8{
         "",                                                     "SELECT WHERE {}",                                                    "SELECT * WHERE { ?s <urn:p> }",
@@ -3077,6 +3411,10 @@ test "rejects malformed or unsupported query syntax" {
         "SELECT (1 AS ?x) { SELECT (2 AS ?x) {} }",             "SELECT * { SELECT (1 AS ?x) (2 AS ?x) {} }",                         "SELECT * { SELECT * WHERE }",
         "SELECT * {} VALUES (?x ?x) { (1 2) }",                 "SELECT * { VALUES (?x ?y) { (1) } }",                                "SELECT * { VALUES (?x ?y) { (1 2 3) } }",
         "SELECT (?o AS ?x) { ?s ?p ?o } GROUP BY ?s",           "SELECT (STR(?o) AS ?x) { ?s ?p ?o } GROUP BY ?s",                    "SELECT * { VALUES ?x { _:blank } }",
+        "SELECT ?x {} GROUP BY (?a AS ?x) (?b AS ?x)",          "SELECT * {} GROUP BY ?x",                                            "SELECT ?x {} HAVING ?x",
+        "SELECT ?x {} ORDER BY ASC ?x",                         "SELECT ?x {} ORDER BY",                                              "SELECT ?x {} LIMIT -1",
+        "SELECT ?x {} LIMIT +1",                                "SELECT ?x {} LIMIT 1 LIMIT 2",                                       "SELECT ?x {} OFFSET 1 OFFSET 2",
+        "SELECT ?x {} LIMIT 1.5",                               "SELECT (?x AS ?g) { ?g ?p ?o } GROUP BY (?x AS ?g)",                 "SELECT ?g {} GROUP BY (?x AS ?g) VALUES ?g { 1 }",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -3097,7 +3435,9 @@ test "query parsing handles every allocation failure" {
             "FILTER(EXISTS { ?o ex:seen true } && NOT EXISTS { ?o ex:hidden true }) " ++
             "MINUS { ?o ex:removed true } " ++
             "{ SELECT (?o AS ?nested) { ?o ex:nested true } } } " ++
-            "GROUP BY ?s VALUES (?extra ?missing) { (1 UNDEF) }",
+            "GROUP BY ?s HAVING (COUNT(*) > 0) " ++
+            "ORDER BY DESC(COUNT(*)) ?s LIMIT 5 OFFSET 1 " ++
+            "VALUES (?extra ?missing) { (1 UNDEF) }",
     });
 }
 

@@ -178,11 +178,17 @@ SELECT subqueries retain their own modifier, projection, and group root behind a
 `SubqueryId`. `Query.subquery` resolves that ID, and projected aliases are checked
 against the variables visible from that subquery without conflating sibling scopes.
 
-GROUP BY conditions are stored as query-local expression IDs and exposed by
-`Query.groupBy`. Inline and trailing VALUES clauses use stable `ValuesId` references;
-each `ValuesBlock` retains its variables, row count, and row-major cells, including
-explicit UNDEF cells. `Query.values` resolves inline blocks and `Query.trailingValues`
-returns the optional final clause. Grouped projection scope accounts for variables
+GROUP BY conditions pair query-local expression IDs with optional aliases and are
+exposed by `Query.groupBy`. `Query.having` and `Query.orderBy` return ordered constraints;
+order conditions retain default, ascending, or descending direction. `Query.solution`
+retains optional LIMIT and OFFSET bounds. The same ranges and bounds are stored on each
+subquery and can be resolved through `Query.groupConditions`, `havingConditions`, and
+`orderConditions`.
+
+Inline and trailing VALUES clauses use stable `ValuesId` references; each `ValuesBlock`
+retains its variables, row count, and row-major cells, including explicit UNDEF cells.
+`Query.values` resolves inline blocks and `Query.trailingValues` returns the optional
+final clause. Grouped projection scope accounts for group aliases and variables
 introduced by trailing VALUES.
 
 `Query.projection` and `Query.patterns` return borrowed slices. `Query.lower` produces

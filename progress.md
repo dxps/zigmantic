@@ -182,7 +182,7 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 132 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 134 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -202,17 +202,17 @@ separate packages only after their APIs and release cycles become independently 
   supported together with complete property-path syntax and a query-owned path AST,
   plus SELECT projection expressions, aggregate calls, relational/logical expressions,
   FILTER, BIND, nested groups, OPTIONAL, UNION, MINUS, EXISTS/NOT EXISTS, SELECT
-  subqueries, ASK, CONSTRUCT WHERE, dataset clauses, GROUP BY, and inline/trailing
-  VALUES; all 97 cases in the pinned query-syntax manifest pass, while grammar absent
-  from that manifest and query evaluation remain incomplete.
+  subqueries, ASK, CONSTRUCT WHERE, dataset clauses, GROUP BY aliases, HAVING, ORDER BY,
+  LIMIT/OFFSET, and inline/trailing VALUES; all 97 cases in the pinned query-syntax
+  manifest pass, while grammar absent from that manifest and query evaluation remain
+  incomplete.
 - Milestones 8–14: not started.
 
 ## Next actions
 
-1. Complete solution modifiers: GROUP BY aliases, HAVING, ORDER BY, LIMIT, and OFFSET.
-2. Add GRAPH and SERVICE patterns, then complete built-in expression syntax before
+1. Add GRAPH and SERVICE patterns, then complete built-in expression syntax before
    freezing the first evaluation-ready query boundary.
-3. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
+2. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
    store.
 
 ## Session log
@@ -957,3 +957,20 @@ separate packages only after their APIs and release cycles become independently 
   milestone 8.
 - Chose completion of solution modifiers as the next implementation slice, followed by
   GRAPH/SERVICE and built-in expressions before the evaluation boundary is frozen.
+
+### 2026-10-25 — SPARQL solution modifiers
+
+- Added GROUP BY expression aliases with query-owned condition ranges and alias-aware
+  grouped projection scope.
+- Added ordered HAVING constraints and ORDER BY conditions with default, ascending, and
+  descending directions.
+- Added non-negative LIMIT and OFFSET bounds in either grammar-permitted order, with
+  duplicate and malformed-bound rejection.
+- Preserved independent solution modifiers on SELECT subqueries through stable ranges
+  into shared query-owned arenas.
+- Extended Project, Ask, and Construct algebra views with resolved group, having, order,
+  limit, and offset data.
+- Added modifier-shape, subquery ownership, alias-scope, malformed-order, integer-bound,
+  and exhaustive allocation-failure coverage.
+- Retained the 97/97 W3C query-syntax baseline; the local suite now has 134 tests and
+  the complete build passes all 140 tests.

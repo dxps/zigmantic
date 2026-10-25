@@ -277,11 +277,17 @@ CONSTRUCT WHERE shorthand reuse the same root-group representation. Top-level FR
 FROM NAMED clauses are retained as resolved, ordered dataset declarations and borrowed
 by each form-specific algebra view.
 
-GROUP BY conditions reference the shared expression arena. VALUES blocks live in a
-separate query-owned arena with owned variable slices and row-major cells; group
-elements and trailing clauses refer to them by stable ID. This keeps zero-column rows
-representable and lets projection-scope checks include trailing VALUES without copying
-data into the algebra view.
+Solution modifiers use query-owned contiguous arenas. GROUP BY entries reference the
+shared expression arena and retain optional aliases; HAVING stores constraint IDs and
+ORDER BY pairs expression IDs with explicit direction. Each query level keeps stable
+ranges into those arenas plus optional LIMIT/OFFSET bounds, so top-level queries and
+subqueries share storage without sharing modifier scope. Form-specific algebra views
+borrow the resolved top-level slices and bounds.
+
+VALUES blocks live in a separate query-owned arena with owned variable slices and
+row-major cells; group elements and trailing clauses refer to them by stable ID. This
+keeps zero-column rows representable and lets projection-scope checks include trailing
+VALUES without copying data into the algebra view.
 
 SPARQL query grammar progress is measured against the pinned W3C SPARQL 1.1
 query-syntax manifest. The runner executes every manifest entry; all 97 currently pass

@@ -12,19 +12,19 @@ claim that every grammar production or its evaluation semantics is implemented.
 | Grammar area | Status | Remaining work |
 | --- | --- | --- |
 | Prologue and dataset clauses | Implemented | Retain coverage while adding query forms. |
-| SELECT and subqueries | Partial | Complete every solution modifier and group-condition form. |
+| SELECT and subqueries | Partial | Add remaining graph patterns, expressions, and evaluation. |
 | ASK | Syntax foundation | Add evaluation and result production. |
 | CONSTRUCT | Partial | Add explicit construct templates; restrict and represent the `CONSTRUCT WHERE` template correctly. |
 | DESCRIBE | Missing | Add targets, optional WHERE, lowering, and result semantics. |
-| GROUP BY | Partial | Add expression aliases and complete grouped-expression scope validation. |
-| HAVING | Missing | Parse ordered constraints and lower them after grouping. |
-| ORDER BY | Missing | Add ascending, descending, constraint, and variable conditions. |
-| LIMIT and OFFSET | Missing | Parse non-negative integer bounds in either permitted order. |
+| GROUP BY | Syntax implemented | Add grouping and alias evaluation. |
+| HAVING | Syntax foundation | Add constraint evaluation after grouping. |
+| ORDER BY | Syntax foundation | Add SPARQL ordering and expression-error semantics. |
+| LIMIT and OFFSET | Syntax implemented | Add slicing after ordering and projection. |
 | Trailing VALUES | Implemented | Add evaluation as a join before projection expressions. |
 
-These rows correspond primarily to productions 2 and 7–28. The next parser slice is
-the remainder of `SolutionModifier` (productions 18–27), because it completes the
-outer shape shared by SELECT, CONSTRUCT, ASK, and subqueries.
+These rows correspond primarily to productions 2 and 7–28. Solution-modifier syntax is
+represented for the current expression slice across SELECT, CONSTRUCT, ASK, and
+subqueries.
 
 ## Graph patterns
 
@@ -83,10 +83,9 @@ section 18. Evaluation is not implemented. Remaining execution work includes:
 
 ## Planned implementation order
 
-1. Complete solution modifiers and their owned/algebra representations.
-2. Add GRAPH and SERVICE graph-pattern nodes, keeping remote execution injectable.
-3. Complete built-in expression syntax and arity validation.
-4. Add DESCRIBE and explicit CONSTRUCT templates.
-5. Freeze the first evaluation-ready AST/algebra boundary, then implement solution
+1. Add GRAPH and SERVICE graph-pattern nodes, keeping remote execution injectable.
+2. Complete built-in expression syntax and arity validation.
+3. Add DESCRIBE and explicit CONSTRUCT templates.
+4. Freeze the first evaluation-ready AST/algebra boundary, then implement solution
    mappings and BGP evaluation over the indexed store.
 
