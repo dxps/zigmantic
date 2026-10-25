@@ -226,6 +226,12 @@ prevents partial constructs from acquiring accidental semantics. Future grammar 
 extends the syntax owner and algebra variants while preserving tokenizer positions,
 query ownership, and the parse/lower boundary.
 
+BASE and PREFIX declarations are retained in query-owned storage. Relative namespace
+and graph-term IRI references use the shared RFC 3986/3987 resolver, while expanded
+prefixed names are stored as IRIs in triple patterns. Percent escapes remain encoded;
+SPARQL local-name backslash escapes are decoded during expansion. Repeated prefix
+declarations are retained for syntax fidelity and the latest declaration is used.
+
 SPARQL query grammar progress is measured against the pinned W3C SPARQL 1.1
 query-syntax manifest. The runner executes every manifest entry and keeps an exact
 test-ID baseline for unsupported positive syntax, so new grammar support removes named

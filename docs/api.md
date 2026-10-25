@@ -122,6 +122,11 @@ variables or IRI references. Unsupported SPARQL grammar is rejected explicitly. 
 variables are stored without their `?` or `$` sigil; IRI-reference terms are stored
 without angle brackets.
 
+`BASE` and `PREFIX` declarations precede the query form. `Query.base_iri` and
+`Query.prefixDeclarations` expose borrowed query-owned prologue values. Relative IRI
+references are resolved when a base is available, and prefixed names are expanded into
+their resolved IRIs. The latest repeated declaration supplies a prefix mapping.
+
 `Query.projection` and `Query.patterns` return borrowed slices. `Query.lower` produces
 an allocation-free `Project(BGP)` algebra view over the same storage. These views remain
 valid only while the query is alive and structurally unchanged. A `Query` must not be

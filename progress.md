@@ -178,12 +178,12 @@ separate packages only after their APIs and release cycles become independently 
   syntax tree, and a borrowed `Project(BGP)` algebra boundary for the first SPARQL 1.1
   query slice.
 - The official SPARQL 1.1 query-syntax manifest is pinned and vendored with all 97
-  referenced queries; the baseline passes all 32 negative cases and explicitly tracks
-  the 65 positive cases not yet accepted by the initial grammar slice.
+  referenced queries; the baseline passes all 32 negative cases and eight positive
+  cases, with the remaining 57 positive cases tracked by exact test ID.
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 113 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 115 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -197,13 +197,15 @@ separate packages only after their APIs and release cycles become independently 
   datatype set; optional recognized-datatype profiles cover only the datatypes explicitly
   exposed by `DatatypeProfile`.
 - Milestone 7 — SPARQL 1.1 query: in progress; tokenizer, ownership, parser, and algebra
-  foundations are implemented for SELECT projection over basic variable/IRI patterns,
-  with the official query-syntax suite pinned to an exact baseline.
+  foundations are implemented for SELECT projection over basic variable/IRI patterns;
+  BASE/PREFIX prologues, relative IRI resolution, and prefixed names are supported, with
+  the official query-syntax suite pinned to an exact baseline.
 - Milestones 8–14: not started.
 
 ## Next actions
 
-1. Add BASE/PREFIX prologue handling and shared SPARQL RDF-term grammar.
+1. Add shared SPARQL RDF-term grammar for blank nodes, literals, numeric/boolean forms,
+   and the `a` predicate abbreviation.
 2. Clear the corresponding official positive-syntax failures as grammar coverage grows.
 
 ## Session log
@@ -770,3 +772,19 @@ separate packages only after their APIs and release cycles become independently 
 - Integrated the runner into `zig build test`; the complete build now runs 119 tests,
   retains all 827 RDF syntax/evaluation passes, and accounts for all 97 SPARQL syntax
   cases without exclusions.
+
+### 2026-10-25 — SPARQL prologue and prefixed names
+
+- Added query-owned BASE and PREFIX declarations, including empty prefixes and repeated
+  declarations with the latest mapping taking effect.
+- Reused the public RFC 3986/3987 resolver for BASE-relative namespace and IRI-reference
+  expansion.
+- Implemented the SPARQL `PN_PREFIX`, `PN_LOCAL`, percent escape, and local escape rules,
+  preserving percent escapes while decoding permitted backslash escapes.
+- Resolved IRI references and prefixed graph terms before storing them in the query AST.
+- Added malformed/undefined-prefix rejection and exhaustive allocation-failure coverage
+  for the new owned prologue and expansion paths.
+- Cleared eight official positive syntax failures: `test_53`, `test_54`, `test_pn_03`
+  through `test_pn_07`, and `test_pn_09`.
+- The official SPARQL baseline now passes 40/97 cases with 57 exact expected failures;
+  the local suite has 115 tests and the complete build has 121 tests.
