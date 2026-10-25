@@ -218,7 +218,8 @@ run in the ordinary suite; Zig's fuzz runner can mutate the same structured inpu
 The `sparql` module separates three layers from its first parser slice. `Tokenizer`
 borrows input and emits positioned tokens without allocation. `Query` owns copied
 syntax values and releases them through an explicit allocator. `Algebra` is initially a
-borrowed view that lowers a SELECT query to `Project(BGP)` without another allocation.
+borrowed view that lowers SELECT, ASK, and CONSTRUCT WHERE syntax to form-specific
+operators over a shared BGP without another allocation.
 
 The initial grammar slice accepts SELECT projections and basic graph patterns made from
 variables and IRI references. Keeping unsupported grammar as an explicit syntax error
@@ -269,6 +270,12 @@ expressions point into the same arena. Recursive scope checks follow preceding n
 optional, and union branches for BIND aliases. The borrowed algebra carries a
 `GroupTable` resolver back to the immutable query owner, avoiding allocation or copied
 group slices during lowering.
+
+SELECT subqueries reuse the expression and group arenas but own independent projection
+slices, preserving projection scope while keeping every ID query-local. ASK and the
+CONSTRUCT WHERE shorthand reuse the same root-group representation. Top-level FROM and
+FROM NAMED clauses are retained as resolved, ordered dataset declarations and borrowed
+by each form-specific algebra view.
 
 SPARQL query grammar progress is measured against the pinned W3C SPARQL 1.1
 query-syntax manifest. The runner executes every manifest entry and keeps an exact

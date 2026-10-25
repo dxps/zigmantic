@@ -174,16 +174,15 @@ separate packages only after their APIs and release cycles become independently 
 - Native Zig fuzz targets exercise simple-entailment mapping and RDFS closure with
   seeded corpora and check monotonicity, blank-node renaming, closure idempotence, and
   asserted-provenance preservation.
-- The public `sparql` module establishes allocation-free tokenization, an owned SELECT
-  syntax tree, and a borrowed `Project(BGP)` algebra boundary for the first SPARQL 1.1
-  query slice.
+- The public `sparql` module establishes allocation-free tokenization, an owned query
+  syntax tree, and borrowed form-specific algebra views over a shared BGP foundation.
 - The official SPARQL 1.1 query-syntax manifest is pinned and vendored with all 97
-  referenced queries; the baseline passes all 32 negative cases and 51 positive cases,
-  with the remaining 14 positive cases tracked by exact test ID.
+  referenced queries; the baseline passes all 32 negative cases and 60 positive cases,
+  with the remaining 5 positive cases tracked by exact test ID.
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 128 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 130 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -202,14 +201,16 @@ separate packages only after their APIs and release cycles become independently 
   literals, native literal forms, triple shorthand, property lists, and collections are
   supported together with complete property-path syntax and a query-owned path AST,
   plus SELECT projection expressions, aggregate calls, relational/logical expressions,
-  FILTER, BIND, nested groups, OPTIONAL, UNION, MINUS, and EXISTS/NOT EXISTS; the
-  official query-syntax suite remains pinned to an exact baseline.
+  FILTER, BIND, nested groups, OPTIONAL, UNION, MINUS, EXISTS/NOT EXISTS, SELECT
+  subqueries, ASK, CONSTRUCT WHERE, and dataset clauses; the official query-syntax suite
+  remains pinned to an exact baseline.
 - Milestones 8–14: not started.
 
 ## Next actions
 
-1. Add SELECT subqueries and the remaining ASK/CONSTRUCT query-form foundations.
-2. Clear the corresponding official positive-syntax failures as grammar coverage grows.
+1. Add VALUES and the GROUP BY/value-scope grammar needed by the five remaining
+   official query-syntax cases.
+2. Audit the completed query-syntax manifest before beginning algebra evaluation.
 
 ## Session log
 
@@ -906,3 +907,19 @@ separate packages only after their APIs and release cycles become independently 
   retaining rejection of negative scope cases `test_61a` and `test_62a`.
 - The official SPARQL baseline now passes 83/97 cases with 14 exact expected failures;
   the local suite has 128 tests and the complete build has 134 tests.
+
+### 2026-10-25 — SPARQL query forms and subqueries
+
+- Added ASK and CONSTRUCT WHERE parsing plus ordered FROM and FROM NAMED dataset clauses.
+- Extended the borrowed algebra boundary with form-specific Project, Ask, and Construct
+  views over the shared BGP, expression, group, and dataset storage.
+- Added SELECT subqueries with independent modifier/projection slices, stable
+  `SubqueryId` references, and query-local group roots.
+- Enforced the SPARQL subquery placement rule and projection-alias scope across nested
+  SELECT boundaries while allowing identical aliases in independent sibling subqueries.
+- Added query-form, dataset, subquery-shape, scope, malformed-syntax, and exhaustive
+  allocation-failure coverage.
+- Cleared official `test_21` through `test_23`, `test_41`, `test_42`, `test_64`,
+  `test_66`, `test_pn_01`, and `test_pn_02` without weakening any negative case.
+- The official SPARQL baseline now passes 92/97 cases with 5 exact expected failures;
+  the local suite has 130 tests and the complete build has 136 tests.

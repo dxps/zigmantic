@@ -116,11 +116,12 @@ byte offsets and borrowed lexemes. `sparql.parseQuery(allocator, input)` returns
 owned query syntax tree and reports `InvalidUtf8`, `InvalidSyntax`, or `OutOfMemory`
 without exposing partially initialized state.
 
-The initial parser slice implements `SELECT`, optional `DISTINCT` or `REDUCED`, wildcard
-or variable projection, optional `WHERE`, and a basic graph pattern whose terms are
-variables or IRI references. Unsupported SPARQL grammar is rejected explicitly. Query
-variables are stored without their `?` or `$` sigil; IRI-reference terms are stored
-without angle brackets.
+The parser implements `SELECT`, `ASK`, and the `CONSTRUCT WHERE` shorthand. SELECT
+supports optional `DISTINCT` or `REDUCED` and wildcard, variable, or expression
+projection. Query forms accept their permitted optional `WHERE` spelling and dataset
+clauses; `DatasetClause.named` distinguishes `FROM NAMED`. Unsupported SPARQL grammar
+is rejected explicitly. Query variables are stored without their `?` or `$` sigil;
+IRI-reference terms are stored without angle brackets.
 
 `BASE` and `PREFIX` declarations precede the query form. `Query.base_iri` and
 `Query.prefixDeclarations` expose borrowed query-owned prologue values. Relative IRI
@@ -173,10 +174,15 @@ and NOT EXISTS expressions reference the same group arena. `Query.groupElements`
 resolves IDs, while `BasicGraphPattern.groups` provides the equivalent allocation-free
 resolver and root ID from the lowered algebra view.
 
+SELECT subqueries retain their own modifier, projection, and group root behind a stable
+`SubqueryId`. `Query.subquery` resolves that ID, and projected aliases are checked
+against the variables visible from that subquery without conflating sibling scopes.
+
 `Query.projection` and `Query.patterns` return borrowed slices. `Query.lower` produces
-an allocation-free `Project(BGP)` algebra view over the same storage. These views remain
-valid only while the query is alive and structurally unchanged. A `Query` must not be
-copied after initialization and must be released with `deinit`.
+an allocation-free `Project`, `Ask`, or `Construct` algebra view over the same BGP,
+dataset, expression, and group storage. These views remain valid only while the query
+is alive and structurally unchanged. A `Query` must not be copied after initialization
+and must be released with `deinit`.
 
 The conformance suite invokes this public parser for all 97 official SPARQL 1.1
 query-syntax cases. Its exact expected-failure list is a grammar-coverage baseline, not
