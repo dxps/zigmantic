@@ -209,10 +209,11 @@ separate packages only after their APIs and release cycles become independently 
 
 ## Next actions
 
-1. Audit SPARQL 1.1 query grammar not exercised by the completed 97-case syntax manifest
-   and record the remaining parser scope explicitly.
-2. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
-   store once the parser boundary for the first executable slice is fixed.
+1. Complete solution modifiers: GROUP BY aliases, HAVING, ORDER BY, LIMIT, and OFFSET.
+2. Add GRAPH and SERVICE patterns, then complete built-in expression syntax before
+   freezing the first evaluation-ready query boundary.
+3. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
+   store.
 
 ## Session log
 
@@ -942,3 +943,17 @@ separate packages only after their APIs and release cycles become independently 
 - All 97 pinned SPARQL 1.1 query-syntax cases now pass with no expected failures; this
   is a manifest-completeness result rather than a claim of complete SPARQL grammar.
 - The local suite has 132 tests and the complete build passes all 138 tests.
+
+### 2026-10-25 — SPARQL 1.1 query grammar audit
+
+- Audited the parser against the W3C Recommendation grammar rather than inferring full
+  coverage from the smaller query-syntax manifest.
+- Recorded implemented, partial, and missing query forms, solution modifiers, graph
+  patterns, expressions, data grammar, algebra, execution, and conformance suites in
+  `docs/sparql-coverage.md`.
+- Identified DESCRIBE, explicit CONSTRUCT templates, most solution modifiers, GRAPH,
+  SERVICE, and most built-in functions as material remaining syntax work.
+- Kept SPARQL Update outside this audit because it is independently scheduled as
+  milestone 8.
+- Chose completion of solution modifiers as the next implementation slice, followed by
+  GRAPH/SERVICE and built-in expressions before the evaluation boundary is frozen.

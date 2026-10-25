@@ -194,6 +194,8 @@ and must be released with `deinit`.
 The conformance suite invokes this public parser for all 97 official SPARQL 1.1
 query-syntax cases. All 97 currently pass without an expected-failure list. This is a
 manifest result, not a claim that SPARQL features absent from that suite are implemented.
+The production-level boundary and remaining implementation order are maintained in
+`docs/sparql-coverage.md`.
 
 ## Indexed store
 
