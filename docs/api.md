@@ -228,6 +228,30 @@ manifest result, not a claim that SPARQL features absent from that suite are imp
 The production-level boundary and remaining implementation order are maintained in
 `docs/sparql-coverage.md`.
 
+## SPARQL basic graph-pattern evaluation
+
+`sparql_eval.evaluateBasicGraphPattern(allocator, query, store)` evaluates the parsed
+root group when it contains only ordinary triple patterns. Matching uses the store's
+subject, predicate, object, and graph indexes and currently reads only the default graph.
+Empty BGPs return the identity multiset containing one empty mapping. Join order follows
+query pattern order, candidate order follows store insertion order, and duplicate
+solution mappings are retained.
+
+The returned `SolutionSequence` owns its mapping and binding arrays and must be released
+with `deinit`. Binding variable names borrow the query, while binding `TermId` values
+belong to the evaluated store. The query and store must therefore outlive inspection of
+the result. `SolutionMapping.get` performs a borrowed variable-name lookup.
+
+Query blank nodes participate as internal existential variables and are not exposed as
+named bindings. Repeated variables and blank nodes must bind consistently within and
+across triple patterns. Constants are matched by RDF term value without interning them
+into or otherwise mutating the store.
+
+This entry point intentionally rejects property paths and non-triple group elements with
+`UnsupportedGraphPattern`. Expressions, joins with graph-pattern operators, datasets,
+solution modifiers, projection, and query-form result construction are subsequent
+evaluation layers.
+
 ## Indexed store
 
 `store.Store` is an allocator-owned in-memory RDF dataset with its own `TermPool`.

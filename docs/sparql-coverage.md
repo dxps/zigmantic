@@ -63,16 +63,17 @@ corpus to become a durable automated gate plus dedicated fuzzing.
 ## Algebra and execution
 
 Current lowering is a borrowed structural view, not the complete SPARQL algebra from
-section 18. Evaluation is not implemented. Remaining execution work includes:
+section 18. The first evaluation layer provides owned solution mappings and evaluates
+ordinary triple BGPs against the indexed store's default graph with bag semantics.
+Remaining execution work includes:
 
-1. solution mappings and expression errors;
-2. BGP matching over the indexed store;
-3. join, left join, union, minus, filter, extend, and table operators;
-4. grouping, aggregates, having, ordering, projection, distinct/reduced, slicing, and
+1. expression values, errors, and effective boolean values;
+2. join, left join, union, minus, filter, extend, and table operators;
+3. grouping, aggregates, having, ordering, projection, distinct/reduced, slicing, and
    trailing VALUES ordering;
-5. dataset and named-graph selection, subqueries, property paths, and query-form result
+4. dataset and named-graph selection, subqueries, property paths, and query-form result
    construction;
-6. SELECT/ASK result serialization and RDF results for CONSTRUCT/DESCRIBE.
+5. SELECT/ASK result serialization and RDF results for CONSTRUCT/DESCRIBE.
 
 ## Conformance expansion
 
@@ -84,8 +85,8 @@ section 18. Evaluation is not implemented. Remaining execution work includes:
 
 ## Planned implementation order
 
-1. Freeze the first evaluation-ready AST/algebra boundary, then implement solution
-   mappings and BGP evaluation over the indexed store.
+1. Implement RDF-term expression evaluation, expression errors, and effective boolean
+   values over solution mappings.
 2. Promote the broader parser audit into a durable conformance gate while evaluation
    manifests are activated incrementally.
 

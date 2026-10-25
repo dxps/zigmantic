@@ -182,8 +182,8 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 145 tests; all 827 integrated RDF syntax/evaluation cases still
-  pass, and the complete 151-test build additionally classifies all 97 pinned SPARQL
+- The local suite has 150 tests; all 827 integrated RDF syntax/evaluation cases still
+  pass, and the complete 156-test build additionally classifies all 97 pinned SPARQL
   query-syntax cases.
 
 ## Milestone status
@@ -208,12 +208,13 @@ separate packages only after their APIs and release cycles become independently 
   SILENT; all 97 cases in the pinned query-syntax manifest pass; every SPARQL 1.1
   built-in call has a strict syntax signature; a differential audit parses all 598
   SPARQL 1.0/1.1 evaluation queries and all 210 positive syntax queries while rejecting
-  all 91 negative syntax queries; evaluation remains incomplete.
+  all 91 negative syntax queries; owned solution mappings and indexed default-graph BGP
+  evaluation are implemented, while the remaining algebra and result layers are not.
 - Milestones 8–14: not started.
 
 ## Milestone 7 fixed plan
 
-Milestone 7 contains 31 tracked increments. After step 7.4.13, 19 are complete and 12
+Milestone 7 contains 31 tracked increments. After step 7.5.1, 20 are complete and 11
 remain. The fixed breakdown is:
 
 - 7.1 — parser/algebra foundation: complete.
@@ -221,8 +222,9 @@ remain. The fixed breakdown is:
 - 7.3.1–7.3.4 — terms, graph nodes, shorthand, and property paths: complete.
 - 7.4.1–7.4.13 — expression syntax, all four query forms, syntax closure, differential
   checks, and parser hardening: complete.
-- 7.5.1–7.5.7 — solution mappings/BGP; expressions; joins and optional operators;
-  datasets and services; property paths; grouping/modifiers; subqueries and query forms.
+- 7.5.1 — solution mappings and BGP evaluation: complete.
+- 7.5.2–7.5.7 — expressions; joins and optional operators; datasets and services;
+  property paths; grouping/modifiers; subqueries and query forms.
 - 7.6.1–7.6.3 — result model and SELECT/ASK; JSON/XML; CSV/TSV and RDF-form integration.
 - 7.7.1–7.7.2 — W3C evaluation manifests; fuzzing, performance, and public-API audit.
 
@@ -231,8 +233,8 @@ work should replace or explicitly revise this list rather than silently extendin
 
 ## Next actions
 
-1. Freeze the evaluation-facing solution-mapping boundary and implement BGP matching
-   over the indexed store (7.5.1).
+1. Implement RDF-term expression evaluation, expression errors, and effective boolean
+   values over solution mappings (7.5.2).
 2. Promote broader W3C parser coverage into a durable automated gate alongside the
    evaluation manifests introduced in milestone 7.7.
 
@@ -1089,3 +1091,25 @@ work should replace or explicitly revise this list rather than silently extendin
 - Advanced the fixed milestone plan to 19 of 31 increments complete, with 12 remaining.
 - Retained the pinned 97/97 syntax gate; the local suite now has 145 tests and the
   complete build passes all 151 tests.
+
+### 2026-10-25 — SPARQL solution mappings and BGP evaluation
+
+- Added the public `sparql_eval` module with allocator-owned solution sequences,
+  ordered variable bindings, and borrowed lookup by variable name.
+- Implemented deterministic nested-loop evaluation of ordinary triple BGPs over the
+  indexed store, binding already-known components into store iterator patterns.
+- Preserved SPARQL multiset semantics, including duplicate visible mappings produced by
+  distinct existential query-blank-node bindings.
+- Matched IRI and literal constants by RDF term value without mutating the store and
+  restricted this first dataset slice to its default graph.
+- Enforced repeated-variable and query-blank-node compatibility across joins while
+  keeping existential blank-node bindings out of public solution mappings.
+- Defined empty BGP evaluation as one empty solution and unmatched constants as an empty
+  solution sequence.
+- Added explicit unsupported-pattern errors for property paths and non-triple group
+  operators until their scheduled evaluator layers are implemented.
+- Added join, default/named graph separation, bag multiplicity, empty/unmatched BGP,
+  unsupported-pattern, and exhaustive allocation-failure tests.
+- Advanced the fixed milestone plan to 20 of 31 increments complete, with 11 remaining.
+- Retained the pinned 97/97 syntax gate; the local suite now has 150 tests and the
+  complete build passes all 156 tests.
