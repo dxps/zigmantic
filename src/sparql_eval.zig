@@ -77,8 +77,8 @@ pub const ExpressionEvaluator = struct {
         self.* = undefined;
     }
 
-    /// Evaluates the RDF-term/variable foundation plus BOUND and logical negation.
-    /// Other operators and functions return `UnsupportedExpression` in this phase.
+    /// Evaluates RDF terms, numeric and logical operators, comparisons, membership,
+    /// BOUND, and logical negation. Other functions remain unsupported in this phase.
     pub fn evaluate(
         self: *ExpressionEvaluator,
         expression_id: sparql.ExpressionId,
@@ -93,15 +93,14 @@ pub const ExpressionEvaluator = struct {
                 .{ .fault = error.UnboundVariable },
             .iri => |iri| self.internNamedNode(iri),
             .literal => |literal| self.internLiteral(literal),
-            .unary => |unary| if (unary.operator == .logical_not)
-                self.evaluateLogicalNot(unary.operand, mapping)
-            else
-                .{ .fault = error.UnsupportedExpression },
+            .unary => |unary| self.evaluateUnary(unary, mapping),
+            .binary => |binary| self.evaluateBinary(binary, mapping),
+            .membership => |membership| self.evaluateMembership(membership, mapping),
             .call => |call| if (std.mem.eql(u8, call.function, "bound"))
                 self.evaluateBound(call, mapping)
             else
                 .{ .fault = error.UnsupportedExpression },
-            .wildcard, .binary, .membership, .exists => .{
+            .wildcard, .exists => .{
                 .fault = error.UnsupportedExpression,
             },
         };
@@ -123,8 +122,7 @@ pub const ExpressionEvaluator = struct {
             return error.TypeError;
         }
         if (isEffectiveBooleanNumeric(literal.datatype)) {
-            const number = std.fmt.parseFloat(f64, literal.lexical_form) catch
-                return error.TypeError;
+            const number = numericAsF64(try self.numericValue(value));
             return number != 0 and !std.math.isNan(number);
         }
         if (std.mem.eql(u8, literal.datatype, rdf.xsd_string) or
@@ -188,6 +186,300 @@ pub const ExpressionEvaluator = struct {
         return .{ .value = id };
     }
 
+    fn internInteger(
+        self: *ExpressionEvaluator,
+        value: i128,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const lexical = try std.fmt.allocPrint(self.allocator, "{d}", .{value});
+        defer self.allocator.free(lexical);
+        return self.internComputedLiteral(lexical, rdf.xsd_integer);
+    }
+
+    fn internFloat(
+        self: *ExpressionEvaluator,
+        value: f64,
+        datatype: []const u8,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        if (std.math.isNan(value)) return self.internComputedLiteral("NaN", datatype);
+        if (std.math.isInf(value)) {
+            return self.internComputedLiteral(if (value < 0) "-INF" else "INF", datatype);
+        }
+        const lexical = try std.fmt.allocPrint(self.allocator, "{d}", .{value});
+        defer self.allocator.free(lexical);
+        return self.internComputedLiteral(lexical, datatype);
+    }
+
+    fn internComputedLiteral(
+        self: *ExpressionEvaluator,
+        lexical: []const u8,
+        datatype: []const u8,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const id = self.terms.internTypedLiteral(lexical, datatype) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => unreachable,
+        };
+        return .{ .value = id };
+    }
+
+    fn evaluateUnary(
+        self: *ExpressionEvaluator,
+        unary: sparql.UnaryExpression,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        if (unary.operator == .logical_not) return self.evaluateLogicalNot(unary.operand, mapping);
+        const result = try self.evaluate(unary.operand, mapping);
+        const value = switch (result) {
+            .value => |item| item,
+            .fault => return result,
+        };
+        const numeric = self.numericValue(value) catch |fault| return .{ .fault = fault };
+        return switch (unary.operator) {
+            .plus => result,
+            .minus => switch (numeric) {
+                .integer => |integer| minus: {
+                    const negated = @subWithOverflow(@as(i128, 0), integer);
+                    if (negated[1] != 0) break :minus .{ .fault = error.TypeError };
+                    break :minus self.internInteger(negated[0]);
+                },
+                .decimal => |number| self.internFloat(-number, rdf.xsd_decimal),
+                .float32 => |number| self.internFloat(-number, rdf.xsd_float),
+                .double => |number| self.internFloat(-number, rdf.xsd_double),
+            },
+            .logical_not => unreachable,
+        };
+    }
+
+    fn evaluateBinary(
+        self: *ExpressionEvaluator,
+        binary: sparql.BinaryExpression,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        return switch (binary.operator) {
+            .logical_or, .logical_and => self.evaluateLogical(binary, mapping),
+            .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => self.evaluateComparison(binary, mapping),
+            .add, .subtract, .multiply, .divide => self.evaluateArithmetic(binary, mapping),
+        };
+    }
+
+    fn evaluateArithmetic(
+        self: *ExpressionEvaluator,
+        binary: sparql.BinaryExpression,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const left_result = try self.evaluate(binary.left, mapping);
+        const left_id = switch (left_result) {
+            .value => |value| value,
+            .fault => return left_result,
+        };
+        const right_result = try self.evaluate(binary.right, mapping);
+        const right_id = switch (right_result) {
+            .value => |value| value,
+            .fault => return right_result,
+        };
+        const left = self.numericValue(left_id) catch |fault| return .{ .fault = fault };
+        const right = self.numericValue(right_id) catch |fault| return .{ .fault = fault };
+        return self.applyArithmetic(binary.operator, left, right);
+    }
+
+    fn applyArithmetic(
+        self: *ExpressionEvaluator,
+        operator: sparql.BinaryOperator,
+        left: NumericValue,
+        right: NumericValue,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        if (left == .integer and right == .integer and operator != .divide) {
+            const pair = switch (operator) {
+                .add => @addWithOverflow(left.integer, right.integer),
+                .subtract => @subWithOverflow(left.integer, right.integer),
+                .multiply => @mulWithOverflow(left.integer, right.integer),
+                else => unreachable,
+            };
+            if (pair[1] != 0) return .{ .fault = error.TypeError };
+            return self.internInteger(pair[0]);
+        }
+
+        const left_number = numericAsF64(left);
+        const right_number = numericAsF64(right);
+        if (operator == .divide and right_number == 0) return .{ .fault = error.TypeError };
+        const value = switch (operator) {
+            .add => left_number + right_number,
+            .subtract => left_number - right_number,
+            .multiply => left_number * right_number,
+            .divide => left_number / right_number,
+            else => unreachable,
+        };
+        const datatype = promotedNumericDatatype(left, right, operator == .divide);
+        const promoted_value = if (std.mem.eql(u8, datatype, rdf.xsd_float))
+            @as(f64, @floatCast(@as(f32, @floatCast(value))))
+        else
+            value;
+        return self.internFloat(promoted_value, datatype);
+    }
+
+    fn evaluateComparison(
+        self: *ExpressionEvaluator,
+        binary: sparql.BinaryExpression,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const left_result = try self.evaluate(binary.left, mapping);
+        const left = switch (left_result) {
+            .value => |value| value,
+            .fault => return left_result,
+        };
+        const right_result = try self.evaluate(binary.right, mapping);
+        const right = switch (right_result) {
+            .value => |value| value,
+            .fault => return right_result,
+        };
+        const compared = self.compareValues(left, right, binary.operator) catch |fault|
+            return .{ .fault = fault };
+        return self.internBoolean(compared);
+    }
+
+    fn evaluateLogical(
+        self: *ExpressionEvaluator,
+        binary: sparql.BinaryExpression,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const left = try self.evaluateBooleanOperand(binary.left, mapping);
+        if (binary.operator == .logical_or and left == .value and left.value) {
+            return self.internBoolean(true);
+        }
+        if (binary.operator == .logical_and and left == .value and !left.value) {
+            return self.internBoolean(false);
+        }
+        const right = try self.evaluateBooleanOperand(binary.right, mapping);
+        return switch (binary.operator) {
+            .logical_or => if (right == .value and right.value)
+                self.internBoolean(true)
+            else if (left == .fault)
+                .{ .fault = left.fault }
+            else if (right == .fault)
+                .{ .fault = right.fault }
+            else
+                self.internBoolean(false),
+            .logical_and => if (right == .value and !right.value)
+                self.internBoolean(false)
+            else if (left == .fault)
+                .{ .fault = left.fault }
+            else if (right == .fault)
+                .{ .fault = right.fault }
+            else
+                self.internBoolean(true),
+            else => unreachable,
+        };
+    }
+
+    fn evaluateBooleanOperand(
+        self: *ExpressionEvaluator,
+        expression_id: sparql.ExpressionId,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!BooleanResult {
+        const result = try self.evaluate(expression_id, mapping);
+        const value = switch (result) {
+            .value => |item| item,
+            .fault => |fault| return .{ .fault = fault },
+        };
+        return .{ .value = self.effectiveBooleanValue(value) catch |fault|
+            return .{ .fault = fault } };
+    }
+
+    fn evaluateMembership(
+        self: *ExpressionEvaluator,
+        membership: sparql.MembershipExpression,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const operand_result = try self.evaluate(membership.operand, mapping);
+        const operand = switch (operand_result) {
+            .value => |value| value,
+            .fault => return operand_result,
+        };
+        const arguments = self.query.expressionArguments(membership.values) orelse
+            return .{ .fault = error.UnsupportedExpression };
+        var remembered_fault: ?ExpressionFault = null;
+        for (arguments) |argument| {
+            const candidate_result = try self.evaluate(argument, mapping);
+            const candidate = switch (candidate_result) {
+                .value => |value| value,
+                .fault => |fault| {
+                    if (remembered_fault == null) remembered_fault = fault;
+                    continue;
+                },
+            };
+            const equal = self.compareValues(operand, candidate, .equal) catch |fault| {
+                if (remembered_fault == null) remembered_fault = fault;
+                continue;
+            };
+            if (equal) return self.internBoolean(!membership.negated);
+        }
+        if (remembered_fault) |fault| return .{ .fault = fault };
+        return self.internBoolean(membership.negated);
+    }
+
+    fn numericValue(self: *const ExpressionEvaluator, value: rdf.TermId) ExpressionFault!NumericValue {
+        const view = self.terms.view(value) orelse return error.UnknownTerm;
+        const literal = switch (view) {
+            .literal => |item| item,
+            else => return error.TypeError,
+        };
+        if (std.mem.eql(u8, literal.datatype, rdf.xsd_integer) or
+            std.mem.eql(u8, literal.datatype, rdf.xsd_int))
+        {
+            return .{ .integer = std.fmt.parseInt(i128, literal.lexical_form, 10) catch
+                return error.TypeError };
+        }
+        if (std.mem.eql(u8, literal.datatype, rdf.xsd_decimal)) {
+            if (!isDecimalLexical(literal.lexical_form)) return error.TypeError;
+            return .{ .decimal = std.fmt.parseFloat(f64, literal.lexical_form) catch
+                return error.TypeError };
+        }
+        if (std.mem.eql(u8, literal.datatype, rdf.xsd_float)) {
+            const number = parseNumericFloat(literal.lexical_form) orelse return error.TypeError;
+            return .{ .float32 = @floatCast(number) };
+        }
+        if (std.mem.eql(u8, literal.datatype, rdf.xsd_double)) {
+            return .{ .double = parseNumericFloat(literal.lexical_form) orelse
+                return error.TypeError };
+        }
+        return error.TypeError;
+    }
+
+    fn compareValues(
+        self: *const ExpressionEvaluator,
+        left_id: rdf.TermId,
+        right_id: rdf.TermId,
+        operator: sparql.BinaryOperator,
+    ) ExpressionFault!bool {
+        const left_view = self.terms.view(left_id) orelse return error.UnknownTerm;
+        const right_view = self.terms.view(right_id) orelse return error.UnknownTerm;
+
+        const left_is_numeric = termViewIsNumeric(left_view);
+        const right_is_numeric = termViewIsNumeric(right_view);
+        if (left_is_numeric or right_is_numeric) {
+            if (!left_is_numeric or !right_is_numeric) return error.TypeError;
+            return compareNumeric(
+                try self.numericValue(left_id),
+                try self.numericValue(right_id),
+                operator,
+            );
+        }
+
+        return switch (left_view) {
+            .named_node => |left| switch (right_view) {
+                .named_node => |right| compareEqualityOnly(std.mem.eql(u8, left, right), operator),
+                else => compareEqualityOnly(false, operator),
+            },
+            .blank_node => |left| switch (right_view) {
+                .blank_node => |right| compareEqualityOnly(std.mem.eql(u8, left, right), operator),
+                else => compareEqualityOnly(false, operator),
+            },
+            .literal => |left| switch (right_view) {
+                .literal => |right| compareLiterals(left, right, operator),
+                else => compareEqualityOnly(false, operator),
+            },
+        };
+    }
+
     fn evaluateLogicalNot(
         self: *ExpressionEvaluator,
         operand: sparql.ExpressionId,
@@ -220,6 +512,155 @@ pub const ExpressionEvaluator = struct {
         return self.internBoolean(mapping.get(variable) != null);
     }
 };
+
+const BooleanResult = union(enum) {
+    value: bool,
+    fault: ExpressionFault,
+};
+
+const NumericValue = union(enum) {
+    integer: i128,
+    decimal: f64,
+    float32: f32,
+    double: f64,
+};
+
+fn numericAsF64(value: NumericValue) f64 {
+    return switch (value) {
+        .integer => |number| @floatFromInt(number),
+        .decimal => |number| number,
+        .float32 => |number| number,
+        .double => |number| number,
+    };
+}
+
+fn numericRank(value: NumericValue) u8 {
+    return switch (value) {
+        .integer => 0,
+        .decimal => 1,
+        .float32 => 2,
+        .double => 3,
+    };
+}
+
+fn promotedNumericDatatype(left: NumericValue, right: NumericValue, division: bool) []const u8 {
+    const rank = @max(numericRank(left), numericRank(right));
+    if (rank == 3) return rdf.xsd_double;
+    if (rank == 2) return rdf.xsd_float;
+    if (rank == 1 or division) return rdf.xsd_decimal;
+    return rdf.xsd_integer;
+}
+
+fn compareNumeric(
+    left: NumericValue,
+    right: NumericValue,
+    operator: sparql.BinaryOperator,
+) ExpressionFault!bool {
+    if (left == .integer and right == .integer) {
+        return compareOrder(std.math.order(left.integer, right.integer), operator);
+    }
+    const left_number = numericAsF64(left);
+    const right_number = numericAsF64(right);
+    if (std.math.isNan(left_number) or std.math.isNan(right_number)) {
+        return switch (operator) {
+            .equal, .less, .less_equal, .greater, .greater_equal => false,
+            .not_equal => true,
+            else => error.TypeError,
+        };
+    }
+    return compareOrder(std.math.order(left_number, right_number), operator);
+}
+
+fn compareLiterals(
+    left: rdf.LiteralView,
+    right: rdf.LiteralView,
+    operator: sparql.BinaryOperator,
+) ExpressionFault!bool {
+    const boolean_datatype = rdf.xsd_namespace ++ "boolean";
+    if (std.mem.eql(u8, left.datatype, boolean_datatype) and
+        std.mem.eql(u8, right.datatype, boolean_datatype))
+    {
+        const left_value = parseBoolean(left.lexical_form) orelse return error.TypeError;
+        const right_value = parseBoolean(right.lexical_form) orelse return error.TypeError;
+        return compareEqualityOnly(left_value == right_value, operator);
+    }
+
+    const left_string = std.mem.eql(u8, left.datatype, rdf.xsd_string);
+    const right_string = std.mem.eql(u8, right.datatype, rdf.xsd_string);
+    const left_language = std.mem.eql(u8, left.datatype, rdf.rdf_lang_string);
+    const right_language = std.mem.eql(u8, right.datatype, rdf.rdf_lang_string);
+    if (left_string and right_string) {
+        return compareOrder(std.mem.order(u8, left.lexical_form, right.lexical_form), operator);
+    }
+    if (left_language and right_language and optionalStringEql(left.language, right.language)) {
+        return compareOrder(std.mem.order(u8, left.lexical_form, right.lexical_form), operator);
+    }
+
+    const same_term = std.mem.eql(u8, left.lexical_form, right.lexical_form) and
+        std.mem.eql(u8, left.datatype, right.datatype) and
+        optionalStringEql(left.language, right.language);
+    if (same_term) return compareEqualityOnly(true, operator);
+    return error.TypeError;
+}
+
+fn compareEqualityOnly(equal: bool, operator: sparql.BinaryOperator) ExpressionFault!bool {
+    return switch (operator) {
+        .equal => equal,
+        .not_equal => !equal,
+        else => error.TypeError,
+    };
+}
+
+fn compareOrder(order: std.math.Order, operator: sparql.BinaryOperator) ExpressionFault!bool {
+    return switch (operator) {
+        .equal => order == .eq,
+        .not_equal => order != .eq,
+        .less => order == .lt,
+        .less_equal => order != .gt,
+        .greater => order == .gt,
+        .greater_equal => order != .lt,
+        else => error.TypeError,
+    };
+}
+
+fn parseBoolean(lexical: []const u8) ?bool {
+    if (std.mem.eql(u8, lexical, "true") or std.mem.eql(u8, lexical, "1")) return true;
+    if (std.mem.eql(u8, lexical, "false") or std.mem.eql(u8, lexical, "0")) return false;
+    return null;
+}
+
+fn parseNumericFloat(lexical: []const u8) ?f64 {
+    if (std.mem.eql(u8, lexical, "INF")) return std.math.inf(f64);
+    if (std.mem.eql(u8, lexical, "-INF")) return -std.math.inf(f64);
+    if (std.mem.eql(u8, lexical, "NaN")) return std.math.nan(f64);
+    return std.fmt.parseFloat(f64, lexical) catch null;
+}
+
+fn isDecimalLexical(lexical: []const u8) bool {
+    if (lexical.len == 0) return false;
+    var index: usize = if (lexical[0] == '+' or lexical[0] == '-') 1 else 0;
+    if (index == lexical.len) return false;
+    var digits: usize = 0;
+    var saw_dot = false;
+    while (index < lexical.len) : (index += 1) {
+        const byte = lexical[index];
+        if (byte >= '0' and byte <= '9') {
+            digits += 1;
+        } else if (byte == '.' and !saw_dot) {
+            saw_dot = true;
+        } else {
+            return false;
+        }
+    }
+    return digits != 0;
+}
+
+fn termViewIsNumeric(view: rdf.TermView) bool {
+    return switch (view) {
+        .literal => |literal| isEffectiveBooleanNumeric(literal.datatype),
+        else => false,
+    };
+}
 
 const BindingKey = union(enum) {
     variable: []const u8,
@@ -692,9 +1133,128 @@ test "represents expression faults and evaluates logical not and BOUND" {
         (try evaluator.evaluate(projection[2].expression.expression, mapping)).fault,
     );
     try std.testing.expectEqual(
-        error.UnsupportedExpression,
+        error.TypeError,
         (try evaluator.evaluate(projection[3].expression.expression, mapping)).fault,
     );
+}
+
+test "evaluates numeric unary arithmetic and comparisons" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    const three = try source.internTypedLiteral("3", rdf.xsd_integer);
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "SELECT (+?x AS ?plus) (-?x AS ?minus) (?x + 2 AS ?sum) " ++
+            "(?x / 2 AS ?quotient) (?x = 3 AS ?equal) (?x < 4 AS ?less) {}",
+    );
+    defer query.deinit();
+    var bindings = [_]SolutionBinding{.{ .variable = "x", .value = three }};
+    const mapping = SolutionMapping{ .bindings = bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+    const projection = query.projection().items;
+
+    const plus = (try evaluator.evaluate(projection[0].expression.expression, mapping)).value;
+    const minus = (try evaluator.evaluate(projection[1].expression.expression, mapping)).value;
+    const sum = (try evaluator.evaluate(projection[2].expression.expression, mapping)).value;
+    const quotient = (try evaluator.evaluate(projection[3].expression.expression, mapping)).value;
+    try std.testing.expectEqualStrings("3", evaluator.terms.view(plus).?.literal.lexical_form);
+    try std.testing.expectEqualStrings("-3", evaluator.terms.view(minus).?.literal.lexical_form);
+    try std.testing.expectEqualStrings("5", evaluator.terms.view(sum).?.literal.lexical_form);
+    const quotient_view = evaluator.terms.view(quotient).?.literal;
+    try std.testing.expectEqualStrings("1.5", quotient_view.lexical_form);
+    try std.testing.expectEqualStrings(rdf.xsd_decimal, quotient_view.datatype);
+
+    const equal = (try evaluator.evaluate(projection[4].expression.expression, mapping)).value;
+    const less = (try evaluator.evaluate(projection[5].expression.expression, mapping)).value;
+    try std.testing.expect(try evaluator.effectiveBooleanValue(equal));
+    try std.testing.expect(try evaluator.effectiveBooleanValue(less));
+}
+
+test "propagates logical expression errors with SPARQL truth tables" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "SELECT ((true || ?missing) AS ?or_true) ((false && ?missing) AS ?and_false) " ++
+            "((false || ?missing) AS ?or_error) ((true && ?missing) AS ?and_error) {}",
+    );
+    defer query.deinit();
+    var no_bindings = [_]SolutionBinding{};
+    const mapping = SolutionMapping{ .bindings = no_bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+    const projection = query.projection().items;
+
+    const or_true = (try evaluator.evaluate(projection[0].expression.expression, mapping)).value;
+    const and_false = (try evaluator.evaluate(projection[1].expression.expression, mapping)).value;
+    try std.testing.expect(try evaluator.effectiveBooleanValue(or_true));
+    try std.testing.expect(!try evaluator.effectiveBooleanValue(and_false));
+    try std.testing.expectEqual(
+        error.UnboundVariable,
+        (try evaluator.evaluate(projection[2].expression.expression, mapping)).fault,
+    );
+    try std.testing.expectEqual(
+        error.UnboundVariable,
+        (try evaluator.evaluate(projection[3].expression.expression, mapping)).fault,
+    );
+}
+
+test "evaluates membership and retains errors when no candidate matches" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "SELECT ((3 IN (?missing, 3)) AS ?matched) ((3 NOT IN (2, 4)) AS ?outside) " ++
+            "((3 IN (?missing, 4)) AS ?failed) {}",
+    );
+    defer query.deinit();
+    var no_bindings = [_]SolutionBinding{};
+    const mapping = SolutionMapping{ .bindings = no_bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+    const projection = query.projection().items;
+
+    const matched = (try evaluator.evaluate(projection[0].expression.expression, mapping)).value;
+    const outside = (try evaluator.evaluate(projection[1].expression.expression, mapping)).value;
+    try std.testing.expect(try evaluator.effectiveBooleanValue(matched));
+    try std.testing.expect(try evaluator.effectiveBooleanValue(outside));
+    try std.testing.expectEqual(
+        error.UnboundVariable,
+        (try evaluator.evaluate(projection[2].expression.expression, mapping)).fault,
+    );
+}
+
+test "reports numeric faults and compares strings" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    const three = try source.internTypedLiteral("3", rdf.xsd_integer);
+    const maximum = try source.internTypedLiteral("170141183460469231731687303715884105727", rdf.xsd_integer);
+    const malformed = try source.internTypedLiteral("not-an-integer", rdf.xsd_integer);
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "SELECT ((?x / 0) AS ?division) ((?maximum + 1) AS ?overflow) " ++
+            "((?malformed = ?malformed) AS ?invalid) (('a' < 'b') AS ?ordered) {}",
+    );
+    defer query.deinit();
+    var bindings = [_]SolutionBinding{
+        .{ .variable = "x", .value = three },
+        .{ .variable = "maximum", .value = maximum },
+        .{ .variable = "malformed", .value = malformed },
+    };
+    const mapping = SolutionMapping{ .bindings = bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+    const projection = query.projection().items;
+
+    for (projection[0..3]) |item| {
+        try std.testing.expectEqual(
+            error.TypeError,
+            (try evaluator.evaluate(item.expression.expression, mapping)).fault,
+        );
+    }
+    const ordered = (try evaluator.evaluate(projection[3].expression.expression, mapping)).value;
+    try std.testing.expect(try evaluator.effectiveBooleanValue(ordered));
 }
 
 test "expression evaluation handles every allocation failure" {
@@ -727,8 +1287,8 @@ fn expectEvaluationSucceeds(allocator: std.mem.Allocator) !void {
 fn expectExpressionEvaluationSucceeds(allocator: std.mem.Allocator) !void {
     var source = rdf.TermPool.init(allocator);
     defer source.deinit();
-    const value = try source.internSimpleLiteral("value");
-    var query = try sparql.parseQuery(allocator, "SELECT (?input AS ?output) {}");
+    const value = try source.internTypedLiteral("3", rdf.xsd_integer);
+    var query = try sparql.parseQuery(allocator, "SELECT (?input + 2 AS ?output) {}");
     defer query.deinit();
     var bindings = [_]SolutionBinding{.{ .variable = "input", .value = value }};
     var evaluator = ExpressionEvaluator.init(allocator, &query, &source);
@@ -736,4 +1296,5 @@ fn expectExpressionEvaluationSucceeds(allocator: std.mem.Allocator) !void {
     const expression_id = query.projection().items[0].expression.expression;
     const result = try evaluator.evaluate(expression_id, .{ .bindings = bindings[0..] });
     try std.testing.expect(result == .value);
+    try std.testing.expectEqualStrings("5", evaluator.terms.view(result.value).?.literal.lexical_form);
 }

@@ -66,12 +66,12 @@ Current lowering is a borrowed structural view, not the complete SPARQL algebra 
 section 18. The first evaluation layer provides owned solution mappings and evaluates
 ordinary triple BGPs against the indexed store's default graph with bag semantics.
 An expression context now owns a separate result term pool, preserves semantic faults as
-values, and implements variables, constants, BOUND, logical negation, and effective
-boolean value. Arithmetic, comparisons, remaining logical operators, and scalar calls
-are still pending.
+values, and implements variables, constants, numeric arithmetic and promotion, RDF value
+comparisons, membership, SPARQL logical error propagation, BOUND, logical negation, and
+effective boolean value. Scalar built-in calls are still pending.
 Remaining execution work includes:
 
-1. remaining operators and scalar built-in evaluation;
+1. scalar built-in evaluation;
 2. join, left join, union, minus, filter, extend, and table operators;
 3. grouping, aggregates, having, ordering, projection, distinct/reduced, slicing, and
    trailing VALUES ordering;
@@ -89,8 +89,7 @@ Remaining execution work includes:
 
 ## Planned implementation order
 
-1. Complete numeric arithmetic, comparisons, logical error propagation, and scalar
-   built-in evaluation over the expression runtime.
+1. Implement scalar built-in evaluation over the expression runtime.
 2. Promote the broader parser audit into a durable conformance gate while evaluation
    manifests are activated incrementally.
 

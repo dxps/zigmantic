@@ -262,7 +262,16 @@ deinitialized before either is released.
 `evaluate(expression_id, mapping)` returns an `ExpressionResult`: either a result-pool
 `TermId` or an `ExpressionFault`. Unbound variables, unknown source IDs, RDF type errors,
 and not-yet-supported expression forms remain distinguishable from allocator failure.
-The initial runtime evaluates variables, RDF constants, `BOUND`, and logical negation.
+The runtime evaluates variables, RDF constants, numeric unary and arithmetic operators,
+RDF value comparisons, `IN`/`NOT IN`, `BOUND`, and logical operators.
+
+Numeric evaluation recognizes `xsd:integer`, `xsd:int`, `xsd:decimal`, `xsd:float`, and
+`xsd:double`, applies SPARQL numeric promotion, preserves integer results where required,
+and reports invalid lexical forms, integer overflow, and division by zero as type errors.
+Logical `&&` and `||` implement SPARQL error truth tables, so a decisive true or false
+operand can determine the result despite an error in the other operand. Membership
+similarly succeeds on any equal candidate and propagates a remembered error only when
+no candidate matches.
 
 `effectiveBooleanValue` implements SPARQL EBV for valid boolean and numeric literals,
 simple strings, and language-tagged strings. Zero, NaN, false, and empty strings are
