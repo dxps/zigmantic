@@ -47,8 +47,8 @@ evaluation will require a caller-supplied service interface.
 Operator precedence, RDF terms, variables, custom IRI calls, `IN`/`NOT IN`, EXISTS,
 NOT EXISTS, all seven aggregate spellings, and the core term/numeric built-ins are
 represented with function-specific signatures. Production 121 remains incomplete:
-string, date/time, hash, UUID, conditional, regex, substring, replace, constructor, and
-variadic built-ins still need syntax validation and evaluation.
+date/time, hash, UUID, and conditional built-ins still need syntax validation. All
+built-ins still require evaluation semantics.
 
 ## Data and lexical grammar
 

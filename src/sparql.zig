@@ -1747,6 +1747,9 @@ const Parser = struct {
             .unary => arguments.len == 1,
             .binary => arguments.len == 2,
             .zero_or_one => arguments.len <= 1,
+            .any => true,
+            .two_or_three => arguments.len == 2 or arguments.len == 3,
+            .three_or_four => arguments.len == 3 or arguments.len == 4,
             .bound_variable => arguments.len == 1 and
                 self.query.expressions.items[arguments[0]] == .variable,
         };
@@ -2634,6 +2637,9 @@ const BuiltinSignature = enum {
     unary,
     binary,
     zero_or_one,
+    any,
+    two_or_three,
+    three_or_four,
     bound_variable,
 };
 
@@ -2643,15 +2649,25 @@ fn isBuiltinFunction(value: []const u8) bool {
 
 fn builtinSignature(value: []const u8) ?BuiltinSignature {
     const unary = [_][]const u8{
-        "str",   "lang",    "datatype",  "iri",       "uri",
-        "abs",   "ceil",    "floor",     "round",     "isiri",
-        "isuri", "isblank", "isliteral", "isnumeric",
+        "str",   "lang",    "datatype",       "iri",       "uri",
+        "abs",   "ceil",    "floor",          "round",     "isiri",
+        "isuri", "isblank", "isliteral",      "isnumeric", "strlen",
+        "ucase", "lcase",   "encode_for_uri",
     };
     for (unary) |name| {
         if (std.ascii.eqlIgnoreCase(value, name)) return .unary;
     }
-    if (std.ascii.eqlIgnoreCase(value, "langmatches") or
-        std.ascii.eqlIgnoreCase(value, "sameterm")) return .binary;
+    const binary = [_][]const u8{
+        "langmatches", "sameterm", "contains", "strstarts", "strends",
+        "strbefore",   "strafter", "strlang",  "strdt",
+    };
+    for (binary) |name| {
+        if (std.ascii.eqlIgnoreCase(value, name)) return .binary;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "concat")) return .any;
+    if (std.ascii.eqlIgnoreCase(value, "substr") or
+        std.ascii.eqlIgnoreCase(value, "regex")) return .two_or_three;
+    if (std.ascii.eqlIgnoreCase(value, "replace")) return .three_or_four;
     if (std.ascii.eqlIgnoreCase(value, "bnode")) return .zero_or_one;
     if (std.ascii.eqlIgnoreCase(value, "rand")) return .zero;
     if (std.ascii.eqlIgnoreCase(value, "bound")) return .bound_variable;
@@ -3322,6 +3338,35 @@ test "parses core term and numeric built-in calls with strict signatures" {
     try std.testing.expectEqual(@as(usize, 2), same.arguments.len);
 }
 
+test "parses string regex and RDF literal constructor built-ins" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "SELECT (CONCAT() AS ?empty) (CONCAT(?x, 'a') AS ?joined) " ++
+            "(SUBSTR(?x, 2) AS ?tail) (SUBSTR(?x, 2, 3) AS ?slice) " ++
+            "(REPLACE(?x, 'a', 'b', 'i') AS ?replaced) " ++
+            "(REGEX(?x, '^a', 'i') AS ?matches) " ++
+            "(STRLANG(?x, 'en') AS ?language) (STRDT(?x, <urn:type>) AS ?typed) " ++
+            "(ENCODE_FOR_URI(UCASE(?x)) AS ?encoded) " ++
+            "(CONTAINS(?x, 'a') AS ?contains) {}",
+    );
+    defer query.deinit();
+
+    const items = query.projection().items;
+    try std.testing.expectEqual(@as(usize, 10), items.len);
+    const empty = query.expression(items[0].expression.expression).?.call;
+    try std.testing.expectEqualStrings("concat", empty.function);
+    try std.testing.expectEqual(@as(usize, 0), empty.arguments.len);
+    const substring = query.expression(items[3].expression.expression).?.call;
+    try std.testing.expectEqualStrings("substr", substring.function);
+    try std.testing.expectEqual(@as(usize, 3), substring.arguments.len);
+    const replacement = query.expression(items[4].expression.expression).?.call;
+    try std.testing.expectEqual(@as(usize, 4), replacement.arguments.len);
+    const regex = query.expression(items[5].expression.expression).?.call;
+    try std.testing.expectEqual(@as(usize, 3), regex.arguments.len);
+    const constructor = query.expression(items[7].expression.expression).?.call;
+    try std.testing.expectEqualStrings("strdt", constructor.function);
+}
+
 test "parses relational logical and membership expressions in FILTER" {
     var query = try parseQuery(
         std.testing.allocator,
@@ -3579,6 +3624,9 @@ test "rejects malformed or unsupported query syntax" {
         "SELECT * { SERVICE ?endpoint {} BIND(1 AS ?endpoint) }", "SELECT (BOUND(1) AS ?x) {}",                                         "SELECT (RAND(1) AS ?x) {}",
         "SELECT (BNODE(1, 2) AS ?x) {}",                          "SELECT (LANGMATCHES(?x) AS ?match) {}",                              "SELECT (ABS() AS ?x) {}",
         "SELECT (sameTerm(?x, ?y, ?z) AS ?same) {}",              "SELECT (isIRI(*) AS ?test) {}",                                      "SELECT (STR(DISTINCT ?x) AS ?value) {}",
+        "SELECT (SUBSTR(?x) AS ?value) {}",                       "SELECT (SUBSTR(?x, 1, 2, 3) AS ?value) {}",                          "SELECT (REGEX(?x) AS ?match) {}",
+        "SELECT (REPLACE(?x, 'a') AS ?value) {}",                 "SELECT (REPLACE(?x, 'a', 'b', 'i', 'x') AS ?value) {}",              "SELECT (STRLANG(?x) AS ?value) {}",
+        "SELECT (CONTAINS(?x, 'a', 'b') AS ?value) {}",           "SELECT (CONCAT(DISTINCT ?x) AS ?value) {}",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -3593,7 +3641,8 @@ test "query parsing handles every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, expectQueryParses, .{
         "BASE <https://example.com/root/> PREFIX ex: <vocab/> " ++
             "SELECT DISTINCT ?s (?s + COUNT(ex:function(?o, 2)) AS ?value) " ++
-            "(BOUND(?s) AS ?present) (ABS(-2) AS ?magnitude) WHERE { " ++
+            "(BOUND(?s) AS ?present) (ABS(-2) AS ?magnitude) " ++
+            "(REPLACE(STR(?s), 'a', 'b', 'i') AS ?replaced) WHERE { " ++
             "[ ex:inner \"hello\\n\"@EN ] (^ex:p/ex:item+|!(ex:skip|^a))? (12.5 true) ; " ++
             "ex:q ?o, \"value\"^^ex:kind . " ++
             "FILTER(?o NOT IN(1, 2)) BIND(?o+1 AS ?bound) " ++

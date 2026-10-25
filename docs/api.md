@@ -165,6 +165,11 @@ and isNUMERIC. Parsing enforces each function's zero, unary, binary, optional-un
 variable-only signature; DISTINCT, wildcard, and aggregate-only separators are rejected
 for scalar calls.
 
+String built-ins include CONCAT, SUBSTR, STRLEN, REPLACE, UCASE, LCASE,
+ENCODE_FOR_URI, CONTAINS, STRSTARTS, STRENDS, STRBEFORE, STRAFTER, and REGEX. STRLANG
+and STRDT provide the RDF-literal constructor syntax. Their signatures retain the
+grammar's variadic, optional-final-argument, unary, and binary distinctions.
+
 Expression precedence additionally covers comparison, equality, conditional-and,
 conditional-or, and `IN`/`NOT IN` membership. Membership value lists use the same safe
 argument-range API as calls.
