@@ -178,12 +178,12 @@ separate packages only after their APIs and release cycles become independently 
   syntax tree, and a borrowed `Project(BGP)` algebra boundary for the first SPARQL 1.1
   query slice.
 - The official SPARQL 1.1 query-syntax manifest is pinned and vendored with all 97
-  referenced queries; the baseline passes all 32 negative cases and 34 positive cases,
-  with the remaining 31 positive cases tracked by exact test ID.
+  referenced queries; the baseline passes all 32 negative cases and 40 positive cases,
+  with the remaining 25 positive cases tracked by exact test ID.
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 124 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 126 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -201,14 +201,13 @@ separate packages only after their APIs and release cycles become independently 
   BASE/PREFIX prologues, relative IRI resolution, prefixed names, blank nodes, RDF
   literals, native literal forms, triple shorthand, property lists, and collections are
   supported together with complete property-path syntax and a query-owned path AST,
-  plus SELECT projection expressions and aggregate call syntax; the official
-  query-syntax suite remains pinned to an exact baseline.
+  plus SELECT projection expressions, aggregate calls, relational/logical expressions,
+  FILTER, and BIND; the official query-syntax suite remains pinned to an exact baseline.
 - Milestones 8–14: not started.
 
 ## Next actions
 
-1. Add relational/logical expressions, `IN`/`NOT IN`, and expression-bearing group
-   patterns such as FILTER and BIND.
+1. Add nested group graph patterns, UNION, MINUS, and EXISTS/NOT EXISTS expressions.
 2. Clear the corresponding official positive-syntax failures as grammar coverage grows.
 
 ## Session log
@@ -869,3 +868,22 @@ separate packages only after their APIs and release cycles become independently 
   aggregate syntax fixture in the pinned manifest.
 - The official SPARQL baseline now passes 66/97 cases with 31 exact expected failures;
   the local suite has 124 tests and the complete build has 130 tests.
+
+### 2026-10-25 — SPARQL relational expressions, FILTER, and BIND
+
+- Added equality, inequality, ordering, conditional-and, and conditional-or precedence
+  above the existing arithmetic expression layers.
+- Implemented `IN` and `NOT IN`, including empty lists and expression-valued members,
+  using safe ranges in the shared expression-argument table.
+- Implemented the SPARQL signed-numeric additive productions so forms such as `?o+1`
+  tokenize and parse correctly without whitespace.
+- Added ordered group elements for expanded triples, FILTER constraints, and BIND
+  assignments while preserving the direct expanded triple slice.
+- Enforced BIND scope by rejecting aliases already introduced by preceding triples or
+  bindings in the same group.
+- Restricted FILTER to bracketed expressions or function-call constraints.
+- Added relational/logical AST, ordering, empty-membership, BIND scope, malformed-list,
+  and exhaustive allocation-failure coverage.
+- Cleared official `test_31` through `test_34`, `test_40`, and `test_55`.
+- The official SPARQL baseline now passes 72/97 cases with 25 exact expected failures;
+  the local suite has 126 tests and the complete build has 132 tests.

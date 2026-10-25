@@ -18,6 +18,10 @@ pub const TokenTag = enum {
     where,
     as,
     separator,
+    filter,
+    bind,
+    in,
+    not,
     variable,
     iri_reference,
     prefixed_name,
@@ -46,6 +50,13 @@ pub const TokenTag = enum {
     minus,
     question,
     equals,
+    not_equals,
+    less,
+    less_equal,
+    greater,
+    greater_equal,
+    logical_and,
+    logical_or,
     dot,
     star,
     identifier,
@@ -85,8 +96,18 @@ pub const Tokenizer = struct {
             ';' => self.single(.semicolon),
             ',' => self.single(.comma),
             '/' => self.single(.slash),
-            '|' => self.single(.pipe),
-            '!' => self.single(.bang),
+            '|' => if (self.index + 1 < self.input.len and self.input[self.index + 1] == '|')
+                self.pair(.logical_or)
+            else
+                self.single(.pipe),
+            '&' => if (self.index + 1 < self.input.len and self.input[self.index + 1] == '&')
+                self.pair(.logical_and)
+            else
+                error.InvalidSyntax,
+            '!' => if (self.index + 1 < self.input.len and self.input[self.index + 1] == '=')
+                self.pair(.not_equals)
+            else
+                self.single(.bang),
             '+' => if (self.index + 1 < self.input.len and
                 (std.ascii.isDigit(self.input[self.index + 1]) or
                     self.input[self.index + 1] == '.'))
@@ -100,6 +121,10 @@ pub const Tokenizer = struct {
             else
                 self.single(.minus),
             '=' => self.single(.equals),
+            '>' => if (self.index + 1 < self.input.len and self.input[self.index + 1] == '=')
+                self.pair(.greater_equal)
+            else
+                self.single(.greater),
             '.' => if (self.index + 1 < self.input.len and
                 std.ascii.isDigit(self.input[self.index + 1]))
                 self.word(offset)
@@ -112,7 +137,7 @@ pub const Tokenizer = struct {
             else
                 self.single(.question),
             '$' => self.variable(),
-            '<' => self.iriReference(),
+            '<' => self.lessOrIriReference(),
             '"', '\'' => self.stringLiteral(),
             '@' => self.languageTag(),
             '^' => if (self.index + 1 < self.input.len and self.input[self.index + 1] == '^')
@@ -127,6 +152,40 @@ pub const Tokenizer = struct {
         const offset = self.index;
         self.index += 1;
         return .{ .tag = tag, .lexeme = self.input[offset..self.index], .offset = offset };
+    }
+
+    fn pair(self: *Tokenizer, tag: TokenTag) Token {
+        const offset = self.index;
+        self.index += 2;
+        return .{ .tag = tag, .lexeme = self.input[offset..self.index], .offset = offset };
+    }
+
+    fn lessOrIriReference(self: *Tokenizer) ParseError!Token {
+        if (self.index + 1 < self.input.len and self.input[self.index + 1] == '=') {
+            return self.pair(.less_equal);
+        }
+        var cursor = self.index + 1;
+        while (cursor < self.input.len) {
+            const byte = self.input[cursor];
+            if (byte == '>') return self.iriReference();
+            if (isWhitespace(byte) or byte == '<' or byte == '"' or byte == '{' or
+                byte == '}' or byte == '|' or byte == '^' or byte == '`')
+            {
+                return self.single(.less);
+            }
+            if (byte == '\\') {
+                cursor += 1;
+                if (cursor >= self.input.len or
+                    (self.input[cursor] != 'u' and self.input[cursor] != 'U'))
+                {
+                    return self.single(.less);
+                }
+                cursor += if (self.input[cursor] == 'u') 5 else 9;
+                continue;
+            }
+            cursor += utf8Length(self.input, cursor) orelse return error.InvalidSyntax;
+        }
+        return self.single(.less);
     }
 
     fn variable(self: *Tokenizer) ParseError!Token {
@@ -285,6 +344,14 @@ pub const Tokenizer = struct {
             .as
         else if (std.ascii.eqlIgnoreCase(lexeme, "SEPARATOR"))
             .separator
+        else if (std.ascii.eqlIgnoreCase(lexeme, "FILTER"))
+            .filter
+        else if (std.ascii.eqlIgnoreCase(lexeme, "BIND"))
+            .bind
+        else if (std.ascii.eqlIgnoreCase(lexeme, "IN"))
+            .in
+        else if (std.ascii.eqlIgnoreCase(lexeme, "NOT"))
+            .not
         else if (std.mem.eql(u8, lexeme, "a"))
             .keyword_a
         else if (std.mem.eql(u8, lexeme, "true") or std.mem.eql(u8, lexeme, "false"))
@@ -381,7 +448,20 @@ pub const TriplePattern = struct {
 pub const ExpressionId = usize;
 
 pub const UnaryOperator = enum { plus, minus, logical_not };
-pub const BinaryOperator = enum { add, subtract, multiply, divide };
+pub const BinaryOperator = enum {
+    logical_or,
+    logical_and,
+    equal,
+    not_equal,
+    less,
+    less_equal,
+    greater,
+    greater_equal,
+    add,
+    subtract,
+    multiply,
+    divide,
+};
 
 pub const UnaryExpression = struct {
     operator: UnaryOperator,
@@ -406,6 +486,12 @@ pub const FunctionCall = struct {
     separator: ?ExpressionId = null,
 };
 
+pub const MembershipExpression = struct {
+    operand: ExpressionId,
+    values: ExpressionRange,
+    negated: bool = false,
+};
+
 pub const Expression = union(enum) {
     variable: []const u8,
     iri: []const u8,
@@ -413,7 +499,19 @@ pub const Expression = union(enum) {
     wildcard,
     unary: UnaryExpression,
     binary: BinaryExpression,
+    membership: MembershipExpression,
     call: FunctionCall,
+};
+
+pub const Binding = struct {
+    expression: ExpressionId,
+    variable: []const u8,
+};
+
+pub const GroupElement = union(enum) {
+    triple: usize,
+    filter: ExpressionId,
+    bind: Binding,
 };
 
 pub const ProjectionExpression = struct {
@@ -447,6 +545,7 @@ pub const Query = struct {
     projection_variables: std.ArrayList([]const u8) = .empty,
     projection_items: std.ArrayList(ProjectionItem) = .empty,
     where_patterns: std.ArrayList(TriplePattern) = .empty,
+    group_elements: std.ArrayList(GroupElement) = .empty,
     paths: std.ArrayList(Path) = .empty,
     negated_properties: std.ArrayList(NegatedProperty) = .empty,
     expressions: std.ArrayList(Expression) = .empty,
@@ -469,6 +568,7 @@ pub const Query = struct {
         self.projection_variables.deinit(self.allocator);
         self.projection_items.deinit(self.allocator);
         self.where_patterns.deinit(self.allocator);
+        self.group_elements.deinit(self.allocator);
         self.paths.deinit(self.allocator);
         self.negated_properties.deinit(self.allocator);
         self.expressions.deinit(self.allocator);
@@ -533,6 +633,7 @@ pub const Query = struct {
             .projection = self.projection(),
             .input = .{ .bgp = .{
                 .triples = self.patterns(),
+                .elements = self.group_elements.items,
                 .paths = self.paths.items,
                 .negated_properties = self.negated_properties.items,
             } },
@@ -551,6 +652,7 @@ pub const Query = struct {
 
 pub const BasicGraphPattern = struct {
     triples: []const TriplePattern,
+    elements: []const GroupElement,
     paths: []const Path,
     negated_properties: []const NegatedProperty,
 };
@@ -693,12 +795,97 @@ const Parser = struct {
     }
 
     fn parseExpression(self: *Parser) ParseError!ExpressionId {
-        return self.parseAdditiveExpression();
+        return self.parseConditionalOrExpression();
+    }
+
+    fn parseConditionalOrExpression(self: *Parser) ParseError!ExpressionId {
+        var left = try self.parseConditionalAndExpression();
+        while ((try self.peek()).tag == .logical_or) {
+            _ = try self.take();
+            left = try self.addExpression(.{ .binary = .{
+                .operator = .logical_or,
+                .left = left,
+                .right = try self.parseConditionalAndExpression(),
+            } });
+        }
+        return left;
+    }
+
+    fn parseConditionalAndExpression(self: *Parser) ParseError!ExpressionId {
+        var left = try self.parseRelationalExpression();
+        while ((try self.peek()).tag == .logical_and) {
+            _ = try self.take();
+            left = try self.addExpression(.{ .binary = .{
+                .operator = .logical_and,
+                .left = left,
+                .right = try self.parseRelationalExpression(),
+            } });
+        }
+        return left;
+    }
+
+    fn parseRelationalExpression(self: *Parser) ParseError!ExpressionId {
+        const left = try self.parseAdditiveExpression();
+        const operator: ?BinaryOperator = switch ((try self.peek()).tag) {
+            .equals => .equal,
+            .not_equals => .not_equal,
+            .less => .less,
+            .less_equal => .less_equal,
+            .greater => .greater,
+            .greater_equal => .greater_equal,
+            else => null,
+        };
+        if (operator) |value| {
+            _ = try self.take();
+            return self.addExpression(.{ .binary = .{
+                .operator = value,
+                .left = left,
+                .right = try self.parseAdditiveExpression(),
+            } });
+        }
+
+        var negated = false;
+        if ((try self.peek()).tag == .not) {
+            _ = try self.take();
+            negated = true;
+            try self.expect(.in);
+        } else if ((try self.peek()).tag == .in) {
+            _ = try self.take();
+        } else {
+            return left;
+        }
+
+        try self.expect(.left_parenthesis);
+        var values: std.ArrayList(ExpressionId) = .empty;
+        defer values.deinit(self.allocator);
+        if ((try self.peek()).tag != .right_parenthesis) {
+            while (true) {
+                try values.append(self.allocator, try self.parseExpression());
+                if ((try self.peek()).tag != .comma) break;
+                _ = try self.take();
+            }
+        }
+        try self.expect(.right_parenthesis);
+        const start = self.query.expression_arguments.items.len;
+        try self.query.expression_arguments.appendSlice(self.allocator, values.items);
+        return self.addExpression(.{ .membership = .{
+            .operand = left,
+            .values = .{ .start = start, .len = values.items.len },
+            .negated = negated,
+        } });
     }
 
     fn parseAdditiveExpression(self: *Parser) ParseError!ExpressionId {
         var left = try self.parseMultiplicativeExpression();
         while (true) {
+            if (isSignedNumericToken(try self.peek())) {
+                left = try self.addExpression(.{ .binary = .{
+                    .operator = .add,
+                    .left = left,
+                    .right = try self.parseSignedMultiplicativeExpression(),
+                } });
+                continue;
+            }
             const operator: BinaryOperator = switch ((try self.peek()).tag) {
                 .plus => .add,
                 .minus => .subtract,
@@ -709,6 +896,35 @@ const Parser = struct {
                 .operator = operator,
                 .left = left,
                 .right = try self.parseMultiplicativeExpression(),
+            } });
+        }
+    }
+
+    fn parseSignedMultiplicativeExpression(self: *Parser) ParseError!ExpressionId {
+        const token = try self.take();
+        var left = switch (token.tag) {
+            .integer => try self.addExpression(.{
+                .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_integer),
+            }),
+            .decimal => try self.addExpression(.{
+                .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_decimal),
+            }),
+            .double => try self.addExpression(.{
+                .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_double),
+            }),
+            else => return error.InvalidSyntax,
+        };
+        while (true) {
+            const operator: BinaryOperator = switch ((try self.peek()).tag) {
+                .star => .multiply,
+                .slash => .divide,
+                else => return left,
+            };
+            _ = try self.take();
+            left = try self.addExpression(.{ .binary = .{
+                .operator = operator,
+                .left = left,
+                .right = try self.parseUnaryExpression(),
             } });
         }
     }
@@ -879,8 +1095,19 @@ const Parser = struct {
     }
 
     fn parseBasicGraphPattern(self: *Parser) ParseError!void {
-        if ((try self.peek()).tag == .right_brace) return;
         while (true) {
+            if ((try self.peek()).tag == .right_brace) return;
+            if ((try self.peek()).tag == .filter) {
+                try self.parseFilter();
+                if ((try self.peek()).tag == .dot) _ = try self.take();
+                continue;
+            }
+            if ((try self.peek()).tag == .bind) {
+                try self.parseBind();
+                if ((try self.peek()).tag == .dot) _ = try self.take();
+                continue;
+            }
+
             const subject = try self.parseGraphNode();
             if (canStartPredicate((try self.peek()).tag)) {
                 try self.parsePropertyList(subject.term, .right_brace);
@@ -889,10 +1116,55 @@ const Parser = struct {
             }
             const separator = try self.peek();
             if (separator.tag == .right_brace) return;
-            if (separator.tag != .dot) return error.InvalidSyntax;
-            _ = try self.take();
-            if ((try self.peek()).tag == .right_brace) return;
+            if (separator.tag == .dot) {
+                _ = try self.take();
+            } else if (separator.tag != .filter and separator.tag != .bind) {
+                return error.InvalidSyntax;
+            }
         }
+    }
+
+    fn parseFilter(self: *Parser) ParseError!void {
+        try self.expect(.filter);
+        const bracketed = (try self.peek()).tag == .left_parenthesis;
+        const expression_id = try self.parseExpression();
+        if (!bracketed and self.query.expressions.items[expression_id] != .call) {
+            return error.InvalidSyntax;
+        }
+        try self.query.group_elements.append(self.allocator, .{
+            .filter = expression_id,
+        });
+    }
+
+    fn parseBind(self: *Parser) ParseError!void {
+        try self.expect(.bind);
+        try self.expect(.left_parenthesis);
+        const expression_id = try self.parseExpression();
+        try self.expect(.as);
+        const variable = try self.take();
+        if (variable.tag != .variable or self.groupHasVariable(variable.lexeme)) {
+            return error.InvalidSyntax;
+        }
+        try self.expect(.right_parenthesis);
+        try self.query.group_elements.append(self.allocator, .{ .bind = .{
+            .expression = expression_id,
+            .variable = try self.query.own(variable.lexeme),
+        } });
+    }
+
+    fn groupHasVariable(self: *const Parser, name: []const u8) bool {
+        for (self.query.where_patterns.items) |triple| {
+            if (termIsVariable(triple.subject, name) or
+                termIsVariable(triple.predicate, name) or
+                termIsVariable(triple.object, name))
+            {
+                return true;
+            }
+        }
+        for (self.query.group_elements.items) |element| {
+            if (element == .bind and std.mem.eql(u8, element.bind.variable, name)) return true;
+        }
+        return false;
     }
 
     fn parsePropertyList(
@@ -925,7 +1197,7 @@ const Parser = struct {
     ) ParseError!void {
         while (true) {
             const object = (try self.parseGraphNode()).term;
-            try self.query.where_patterns.append(self.allocator, .{
+            try self.appendTriple(.{
                 .subject = subject,
                 .predicate = predicate,
                 .object = object,
@@ -1121,7 +1393,7 @@ const Parser = struct {
         var current = head;
         while (true) {
             const item = (try self.parseGraphNode()).term;
-            try self.query.where_patterns.append(self.allocator, .{
+            try self.appendTriple(.{
                 .subject = current,
                 .predicate = .{ .iri = rdf_mod.rdf_namespace ++ "first" },
                 .object = item,
@@ -1129,7 +1401,7 @@ const Parser = struct {
 
             if ((try self.peek()).tag == .right_parenthesis) {
                 _ = try self.take();
-                try self.query.where_patterns.append(self.allocator, .{
+                try self.appendTriple(.{
                     .subject = current,
                     .predicate = .{ .iri = rdf_mod.rdf_namespace ++ "rest" },
                     .object = .{ .iri = rdf_mod.rdf_namespace ++ "nil" },
@@ -1138,13 +1410,19 @@ const Parser = struct {
             }
 
             const tail = self.freshAnonymousBlankNode();
-            try self.query.where_patterns.append(self.allocator, .{
+            try self.appendTriple(.{
                 .subject = current,
                 .predicate = .{ .iri = rdf_mod.rdf_namespace ++ "rest" },
                 .object = tail,
             });
             current = tail;
         }
+    }
+
+    fn appendTriple(self: *Parser, triple: TriplePattern) ParseError!void {
+        const index = self.query.where_patterns.items.len;
+        try self.query.where_patterns.append(self.allocator, triple);
+        try self.query.group_elements.append(self.allocator, .{ .triple = index });
     }
 
     fn parseStringLiteral(self: *Parser, raw: []const u8) ParseError!Literal {
@@ -1291,6 +1569,13 @@ fn canStartPredicate(tag: TokenTag) bool {
     return tag == .variable or canStartPath(tag);
 }
 
+fn termIsVariable(term: PatternTerm, name: []const u8) bool {
+    return switch (term) {
+        .variable => |variable| std.mem.eql(u8, variable, name),
+        else => false,
+    };
+}
+
 fn canStartPath(tag: TokenTag) bool {
     return tag == .iri_reference or tag == .prefixed_name or tag == .keyword_a or
         tag == .caret or tag == .bang or tag == .left_parenthesis;
@@ -1298,6 +1583,11 @@ fn canStartPath(tag: TokenTag) bool {
 
 fn isBuiltinFunction(value: []const u8) bool {
     return std.ascii.eqlIgnoreCase(value, "datatype") or isAggregateFunction(value);
+}
+
+fn isSignedNumericToken(token: Token) bool {
+    return (token.tag == .integer or token.tag == .decimal or token.tag == .double) and
+        token.lexeme.len > 1 and (token.lexeme[0] == '+' or token.lexeme[0] == '-');
 }
 
 fn isAggregateFunction(value: []const u8) bool {
@@ -1315,7 +1605,7 @@ fn isDelimiter(byte: u8) bool {
         byte == '.' or byte == '*' or byte == '<' or byte == '>' or byte == '?' or
         byte == '$' or byte == '(' or byte == ')' or byte == '[' or byte == ']' or
         byte == ';' or byte == ',' or byte == '/' or byte == '|' or byte == '!' or
-        byte == '^' or byte == '+' or byte == '-' or byte == '=';
+        byte == '^' or byte == '+' or byte == '-' or byte == '=' or byte == '&';
 }
 
 fn isWordDelimiter(byte: u8) bool {
@@ -1323,7 +1613,7 @@ fn isWordDelimiter(byte: u8) bool {
         byte == '*' or byte == '<' or byte == '>' or byte == '?' or byte == '$' or
         byte == '(' or byte == ')' or byte == '[' or byte == ']' or byte == ';' or
         byte == ',' or byte == '/' or byte == '|' or byte == '!' or byte == '^' or
-        byte == '+' or byte == '=';
+        byte == '+' or byte == '=' or byte == '&';
 }
 
 fn isNumericExponentPrefix(value: []const u8) bool {
@@ -1930,6 +2220,42 @@ test "parses aggregate DISTINCT wildcard and GROUP_CONCAT separator syntax" {
     try std.testing.expectEqual(@as(usize, 2), lowered.expression_arguments.len);
 }
 
+test "parses relational logical and membership expressions in FILTER" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "SELECT * { ?s ?p ?o " ++
+            "FILTER((?o >= 1 && ?o < 10) || ?o != 2) " ++
+            "FILTER(?o NOT IN(1, 2, ?s+57)) FILTER(?o IN()) }",
+    );
+    defer query.deinit();
+
+    const elements = query.lower().project.input.bgp.elements;
+    try std.testing.expectEqual(@as(usize, 4), elements.len);
+    const logical = query.expression(elements[1].filter).?.binary;
+    try std.testing.expectEqual(BinaryOperator.logical_or, logical.operator);
+    const membership = query.expression(elements[2].filter).?.membership;
+    try std.testing.expect(membership.negated);
+    try std.testing.expectEqual(@as(usize, 3), query.expressionArguments(membership.values).?.len);
+    const empty_membership = query.expression(elements[3].filter).?.membership;
+    try std.testing.expect(!empty_membership.negated);
+    try std.testing.expectEqual(@as(usize, 0), empty_membership.values.len);
+}
+
+test "preserves ordered BIND elements and validates group scope" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "SELECT ?next { ?s ?p ?o . BIND(?o+1 AS ?next) " ++
+            "BIND(?next/2 AS ?half) FILTER(?half = 1) }",
+    );
+    defer query.deinit();
+
+    const elements = query.lower().project.input.bgp.elements;
+    try std.testing.expectEqual(@as(usize, 4), elements.len);
+    try std.testing.expectEqualStrings("next", elements[1].bind.variable);
+    try std.testing.expectEqualStrings("half", elements[2].bind.variable);
+    try std.testing.expect(elements[3] == .filter);
+}
+
 test "lowers SELECT syntax to project over a BGP" {
     var query = try parseQuery(std.testing.allocator, "SELECT ?s WHERE { ?s <urn:p> <urn:o> }");
     defer query.deinit();
@@ -1953,7 +2279,9 @@ test "rejects malformed or unsupported query syntax" {
         "SELECT * { ?s () ?o }",                                "SELECT * { ?s |<urn:p> ?o }",                                        "SELECT (1 AS ?x) (2 AS ?x) {}",
         "SELECT (?x + ?y) {}",                                  "SELECT (?x AS <urn:x>) {}",                                          "SELECT (COUNT(?x, ?y) AS ?count) {}",
         "SELECT (SUM(*) AS ?sum) {}",                           "SELECT (datatype(DISTINCT ?x) AS ?dt) {}",                           "SELECT (COUNT(?x; SEPARATOR=',') AS ?count) {}",
-        "SELECT (unknown(?x) AS ?value) {}",                    "SELECT (GROUP_CONCAT(?x; SEPARATOR='x'^^<urn:type>) AS ?joined) {}",
+        "SELECT (unknown(?x) AS ?value) {}",                    "SELECT (GROUP_CONCAT(?x; SEPARATOR='x'^^<urn:type>) AS ?joined) {}", "SELECT * { ?s ?p ?o FILTER(?o IN(1,)) }",
+        "SELECT * { ?s ?p ?o FILTER(?o < ?s < 3) }",            "SELECT * { ?s ?p ?o FILTER(?o & true) }",                            "SELECT * { ?s ?p ?o BIND(?o AS ?o) }",
+        "SELECT * { BIND(1 AS ?x) BIND(2 AS ?x) }",             "SELECT * { FILTER true }",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -1969,7 +2297,8 @@ test "query parsing handles every allocation failure" {
         "BASE <https://example.com/root/> PREFIX ex: <vocab/> " ++
             "SELECT DISTINCT ?s (?s + ex:function(?o, 2) AS ?value) WHERE { " ++
             "[ ex:inner \"hello\\n\"@EN ] (^ex:p/ex:item+|!(ex:skip|^a))? (12.5 true) ; " ++
-            "ex:q ?o, \"value\"^^ex:kind . }",
+            "ex:q ?o, \"value\"^^ex:kind . " ++
+            "FILTER(?o NOT IN(1, 2)) BIND(?o+1 AS ?bound) }",
     });
 }
 

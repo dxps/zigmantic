@@ -158,6 +158,15 @@ aggregate call syntax. Aggregate nodes retain DISTINCT, COUNT wildcard, and opti
 GROUP_CONCAT separator information. The lowered Project view carries the complete
 expression and argument tables.
 
+Expression precedence additionally covers comparison, equality, conditional-and,
+conditional-or, and `IN`/`NOT IN` membership. Membership value lists use the same safe
+argument-range API as calls.
+
+The lowered BGP exposes ordered `GroupElement` values. Triple elements reference
+`TriplePattern` indexes; FILTER elements reference constraint expressions; BIND
+elements pair an expression with its introduced variable. `Query.patterns` remains the
+direct expanded-triple view for callers that do not yet consume group operations.
+
 `Query.projection` and `Query.patterns` return borrowed slices. `Query.lower` produces
 an allocation-free `Project(BGP)` algebra view over the same storage. These views remain
 valid only while the query is alive and structurally unchanged. A `Query` must not be

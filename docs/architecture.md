@@ -257,6 +257,12 @@ projections preserve their compact public representation. The Project algebra vi
 carries both expression nodes and argument IDs, so aliases can be evaluated without
 accessing mutable parser state.
 
+The parsed WHERE group retains an ordered element stream alongside its expanded triple
+slice. Triple elements reference indexes in that slice; FILTER and BIND elements refer
+to query-owned expressions, and BIND stores its introduced variable. This preserves
+group ordering and scope without abandoning the compact BGP representation used by
+existing consumers.
+
 SPARQL query grammar progress is measured against the pinned W3C SPARQL 1.1
 query-syntax manifest. The runner executes every manifest entry and keeps an exact
 test-ID baseline for unsupported positive syntax, so new grammar support removes named
