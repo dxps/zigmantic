@@ -277,7 +277,13 @@ CONSTRUCT WHERE shorthand reuse the same root-group representation. Top-level FR
 FROM NAMED clauses are retained as resolved, ordered dataset declarations and borrowed
 by each form-specific algebra view.
 
+GROUP BY conditions reference the shared expression arena. VALUES blocks live in a
+separate query-owned arena with owned variable slices and row-major cells; group
+elements and trailing clauses refer to them by stable ID. This keeps zero-column rows
+representable and lets projection-scope checks include trailing VALUES without copying
+data into the algebra view.
+
 SPARQL query grammar progress is measured against the pinned W3C SPARQL 1.1
-query-syntax manifest. The runner executes every manifest entry and keeps an exact
-test-ID baseline for unsupported positive syntax, so new grammar support removes named
-failures while accidental acceptance or rejection is reported as a regression.
+query-syntax manifest. The runner executes every manifest entry; all 97 currently pass
+without expected failures, so accidental acceptance or rejection is reported as a
+regression. Features not represented by that manifest still require separate coverage.

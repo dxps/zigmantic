@@ -177,12 +177,12 @@ separate packages only after their APIs and release cycles become independently 
 - The public `sparql` module establishes allocation-free tokenization, an owned query
   syntax tree, and borrowed form-specific algebra views over a shared BGP foundation.
 - The official SPARQL 1.1 query-syntax manifest is pinned and vendored with all 97
-  referenced queries; the baseline passes all 32 negative cases and 60 positive cases,
-  with the remaining 5 positive cases tracked by exact test ID.
+  referenced queries; all 32 negative and 65 positive cases pass with no expected
+  failures.
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 130 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 132 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -202,15 +202,17 @@ separate packages only after their APIs and release cycles become independently 
   supported together with complete property-path syntax and a query-owned path AST,
   plus SELECT projection expressions, aggregate calls, relational/logical expressions,
   FILTER, BIND, nested groups, OPTIONAL, UNION, MINUS, EXISTS/NOT EXISTS, SELECT
-  subqueries, ASK, CONSTRUCT WHERE, and dataset clauses; the official query-syntax suite
-  remains pinned to an exact baseline.
+  subqueries, ASK, CONSTRUCT WHERE, dataset clauses, GROUP BY, and inline/trailing
+  VALUES; all 97 cases in the pinned query-syntax manifest pass, while grammar absent
+  from that manifest and query evaluation remain incomplete.
 - Milestones 8–14: not started.
 
 ## Next actions
 
-1. Add VALUES and the GROUP BY/value-scope grammar needed by the five remaining
-   official query-syntax cases.
-2. Audit the completed query-syntax manifest before beginning algebra evaluation.
+1. Audit SPARQL 1.1 query grammar not exercised by the completed 97-case syntax manifest
+   and record the remaining parser scope explicitly.
+2. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
+   store once the parser boundary for the first executable slice is fixed.
 
 ## Session log
 
@@ -923,3 +925,20 @@ separate packages only after their APIs and release cycles become independently 
   `test_66`, `test_pn_01`, and `test_pn_02` without weakening any negative case.
 - The official SPARQL baseline now passes 92/97 cases with 5 exact expected failures;
   the local suite has 130 tests and the complete build has 136 tests.
+
+### 2026-10-25 — SPARQL VALUES and grouped projection scope
+
+- Added inline and trailing VALUES clauses with single-variable, tuple, empty-variable,
+  empty-row, and UNDEF forms.
+- Added query-owned VALUES blocks with stable IDs, row-major cells, safe lookup, and
+  explicit row counts so zero-column rows remain distinguishable.
+- Added GROUP BY expression storage and exposed grouped conditions and trailing VALUES
+  through both the query and borrowed algebra APIs.
+- Added the STR built-in needed by grouped projection expressions.
+- Enforced VALUES row arity, unique variables, grouped wildcard rejection, grouped
+  variable scope, and conflicts between SELECT aliases and trailing VALUES bindings.
+- Cleared the final five expected failures while retaining every official negative
+  syntax rejection.
+- All 97 pinned SPARQL 1.1 query-syntax cases now pass with no expected failures; this
+  is a manifest-completeness result rather than a claim of complete SPARQL grammar.
+- The local suite has 132 tests and the complete build passes all 138 tests.

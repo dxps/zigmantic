@@ -178,6 +178,13 @@ SELECT subqueries retain their own modifier, projection, and group root behind a
 `SubqueryId`. `Query.subquery` resolves that ID, and projected aliases are checked
 against the variables visible from that subquery without conflating sibling scopes.
 
+GROUP BY conditions are stored as query-local expression IDs and exposed by
+`Query.groupBy`. Inline and trailing VALUES clauses use stable `ValuesId` references;
+each `ValuesBlock` retains its variables, row count, and row-major cells, including
+explicit UNDEF cells. `Query.values` resolves inline blocks and `Query.trailingValues`
+returns the optional final clause. Grouped projection scope accounts for variables
+introduced by trailing VALUES.
+
 `Query.projection` and `Query.patterns` return borrowed slices. `Query.lower` produces
 an allocation-free `Project`, `Ask`, or `Construct` algebra view over the same BGP,
 dataset, expression, and group storage. These views remain valid only while the query
@@ -185,8 +192,8 @@ is alive and structurally unchanged. A `Query` must not be copied after initiali
 and must be released with `deinit`.
 
 The conformance suite invokes this public parser for all 97 official SPARQL 1.1
-query-syntax cases. Its exact expected-failure list is a grammar-coverage baseline, not
-an alternate parser or a claim that unsupported positive syntax is conformant.
+query-syntax cases. All 97 currently pass without an expected-failure list. This is a
+manifest result, not a claim that SPARQL features absent from that suite are implemented.
 
 ## Indexed store
 

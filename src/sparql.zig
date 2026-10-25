@@ -30,6 +30,10 @@ pub const TokenTag = enum {
     optional,
     from,
     named,
+    group_keyword,
+    by,
+    values_keyword,
+    undef,
     variable,
     iri_reference,
     prefixed_name,
@@ -376,6 +380,14 @@ pub const Tokenizer = struct {
             .from
         else if (std.ascii.eqlIgnoreCase(lexeme, "NAMED"))
             .named
+        else if (std.ascii.eqlIgnoreCase(lexeme, "GROUP"))
+            .group_keyword
+        else if (std.ascii.eqlIgnoreCase(lexeme, "BY"))
+            .by
+        else if (std.ascii.eqlIgnoreCase(lexeme, "VALUES"))
+            .values_keyword
+        else if (std.ascii.eqlIgnoreCase(lexeme, "UNDEF"))
+            .undef
         else if (std.mem.eql(u8, lexeme, "a"))
             .keyword_a
         else if (std.mem.eql(u8, lexeme, "true") or std.mem.eql(u8, lexeme, "false"))
@@ -518,6 +530,7 @@ pub const MembershipExpression = struct {
 
 pub const GroupId = usize;
 pub const SubqueryId = usize;
+pub const ValuesId = usize;
 
 pub const ExistsExpression = struct {
     group: GroupId,
@@ -555,6 +568,7 @@ pub const GroupElement = union(enum) {
     minus: GroupId,
     union_group: BinaryGroup,
     subquery: SubqueryId,
+    values: ValuesId,
 };
 
 const Group = struct {
@@ -567,6 +581,8 @@ pub const Subquery = struct {
     projection_variables: []const []const u8,
     projection_items: []const ProjectionItem,
     group: GroupId,
+    group_by: ExpressionRange,
+    trailing_values: ?ValuesId,
 
     pub fn projection(self: Subquery) Projection {
         if (self.select_all) return .all;
@@ -574,6 +590,22 @@ pub const Subquery = struct {
             return .{ .variables = self.projection_variables };
         }
         return .{ .items = self.projection_items };
+    }
+};
+
+pub const DataValue = union(enum) {
+    term: PatternTerm,
+    undefined,
+};
+
+pub const ValuesBlock = struct {
+    variables: []const []const u8,
+    cells: []const DataValue,
+    row_count: usize,
+
+    pub fn value(self: ValuesBlock, row: usize, column: usize) ?DataValue {
+        if (row >= self.row_count or column >= self.variables.len) return null;
+        return self.cells[row * self.variables.len + column];
     }
 };
 
@@ -618,8 +650,11 @@ pub const Query = struct {
     where_patterns: std.ArrayList(TriplePattern) = .empty,
     groups: std.ArrayList(Group) = .empty,
     subqueries: std.ArrayList(Subquery) = .empty,
+    values_blocks: std.ArrayList(ValuesBlock) = .empty,
     root_group: ?GroupId = null,
     dataset_clauses: std.ArrayList(DatasetClause) = .empty,
+    group_by: ExpressionRange = .{ .start = 0, .len = 0 },
+    trailing_values: ?ValuesId = null,
     paths: std.ArrayList(Path) = .empty,
     negated_properties: std.ArrayList(NegatedProperty) = .empty,
     expressions: std.ArrayList(Expression) = .empty,
@@ -649,6 +684,11 @@ pub const Query = struct {
             self.allocator.free(nested_query.projection_items);
         }
         self.subqueries.deinit(self.allocator);
+        for (self.values_blocks.items) |block| {
+            self.allocator.free(block.variables);
+            self.allocator.free(block.cells);
+        }
+        self.values_blocks.deinit(self.allocator);
         self.dataset_clauses.deinit(self.allocator);
         self.paths.deinit(self.allocator);
         self.negated_properties.deinit(self.allocator);
@@ -710,6 +750,19 @@ pub const Query = struct {
         return self.dataset_clauses.items;
     }
 
+    pub fn values(self: *const Query, id: ValuesId) ?ValuesBlock {
+        if (id >= self.values_blocks.items.len) return null;
+        return self.values_blocks.items[id];
+    }
+
+    pub fn trailingValues(self: *const Query) ?ValuesBlock {
+        return self.values(self.trailing_values orelse return null);
+    }
+
+    pub fn groupBy(self: *const Query) []const ExpressionId {
+        return self.expressionArguments(self.group_by) orelse unreachable;
+    }
+
     pub fn negatedPropertySet(
         self: *const Query,
         set: NegatedPropertySet,
@@ -730,18 +783,24 @@ pub const Query = struct {
                 .projection = self.projection(),
                 .input = input,
                 .datasets = self.dataset_clauses.items,
+                .group_by = self.groupBy(),
+                .trailing_values = self.trailingValues(),
                 .expressions = self.expressions.items,
                 .expression_arguments = self.expression_arguments.items,
             } },
             .ask => .{ .ask = .{
                 .input = input,
                 .datasets = self.dataset_clauses.items,
+                .group_by = self.groupBy(),
+                .trailing_values = self.trailingValues(),
                 .expressions = self.expressions.items,
                 .expression_arguments = self.expression_arguments.items,
             } },
             .construct => .{ .construct = .{
                 .input = input,
                 .datasets = self.dataset_clauses.items,
+                .group_by = self.groupBy(),
+                .trailing_values = self.trailingValues(),
                 .expressions = self.expressions.items,
                 .expression_arguments = self.expression_arguments.items,
             } },
@@ -793,6 +852,8 @@ pub const Project = struct {
     projection: Projection,
     input: AlgebraInput,
     datasets: []const DatasetClause,
+    group_by: []const ExpressionId,
+    trailing_values: ?ValuesBlock,
     expressions: []const Expression,
     expression_arguments: []const ExpressionId,
 };
@@ -800,6 +861,8 @@ pub const Project = struct {
 pub const Ask = struct {
     input: AlgebraInput,
     datasets: []const DatasetClause,
+    group_by: []const ExpressionId,
+    trailing_values: ?ValuesBlock,
     expressions: []const Expression,
     expression_arguments: []const ExpressionId,
 };
@@ -807,6 +870,8 @@ pub const Ask = struct {
 pub const Construct = struct {
     input: AlgebraInput,
     datasets: []const DatasetClause,
+    group_by: []const ExpressionId,
+    trailing_values: ?ValuesBlock,
     expressions: []const Expression,
     expression_arguments: []const ExpressionId,
 };
@@ -867,10 +932,6 @@ const Parser = struct {
                 });
                 try self.parseDatasetClauses();
                 try self.parseRootWhere(false);
-                if (!self.projectionAliasesAreValid(
-                    self.query.projection_items.items,
-                    self.query.root_group.?,
-                )) return error.InvalidSyntax;
             },
             .ask => {
                 _ = try self.take();
@@ -886,7 +947,39 @@ const Parser = struct {
             },
             else => return error.InvalidSyntax,
         }
+        self.query.group_by = try self.parseGroupBy();
+        if ((try self.peek()).tag == .values_keyword) {
+            self.query.trailing_values = try self.parseValuesClause();
+        }
+        if (self.query.form == .select and !self.projectionAliasesAreValid(
+            self.query.projection_items.items,
+            self.query.root_group.?,
+            self.query.trailing_values,
+        )) return error.InvalidSyntax;
+        if (self.query.form == .select and !self.groupedProjectionIsValid(
+            self.query.projection_items.items,
+            self.query.select_all,
+            self.query.group_by,
+            self.query.trailing_values,
+        )) return error.InvalidSyntax;
         try self.expect(.eof);
+    }
+
+    fn parseGroupBy(self: *Parser) ParseError!ExpressionRange {
+        if ((try self.peek()).tag != .group_keyword) {
+            return .{ .start = self.query.expression_arguments.items.len, .len = 0 };
+        }
+        _ = try self.take();
+        try self.expect(.by);
+        var expressions: std.ArrayList(ExpressionId) = .empty;
+        defer expressions.deinit(self.allocator);
+        while (canStartGroupCondition((try self.peek()).tag)) {
+            try expressions.append(self.allocator, try self.parseExpression());
+        }
+        if (expressions.items.len == 0) return error.InvalidSyntax;
+        const start = self.query.expression_arguments.items.len;
+        try self.query.expression_arguments.appendSlice(self.allocator, expressions.items);
+        return .{ .start = start, .len = expressions.items.len };
     }
 
     fn parseSelectClause(self: *Parser, target: ProjectionTarget) ParseError!void {
@@ -957,6 +1050,69 @@ const Parser = struct {
                 .named = named,
             });
         }
+    }
+
+    fn parseValuesClause(self: *Parser) ParseError!ValuesId {
+        try self.expect(.values_keyword);
+        var variables: std.ArrayList([]const u8) = .empty;
+        defer variables.deinit(self.allocator);
+        if ((try self.peek()).tag == .variable) {
+            const variable = try self.take();
+            try variables.append(self.allocator, try self.query.own(variable.lexeme));
+        } else {
+            try self.expect(.left_parenthesis);
+            while ((try self.peek()).tag != .right_parenthesis) {
+                const variable = try self.take();
+                if (variable.tag != .variable or stringSliceContains(variables.items, variable.lexeme)) {
+                    return error.InvalidSyntax;
+                }
+                try variables.append(self.allocator, try self.query.own(variable.lexeme));
+            }
+            try self.expect(.right_parenthesis);
+        }
+
+        try self.expect(.left_brace);
+        var cells: std.ArrayList(DataValue) = .empty;
+        defer cells.deinit(self.allocator);
+        var row_count: usize = 0;
+        if (variables.items.len == 1) {
+            while ((try self.peek()).tag != .right_brace) {
+                try cells.append(self.allocator, try self.parseDataValue());
+                row_count += 1;
+            }
+        } else {
+            while ((try self.peek()).tag != .right_brace) {
+                try self.expect(.left_parenthesis);
+                for (0..variables.items.len) |_| {
+                    try cells.append(self.allocator, try self.parseDataValue());
+                }
+                try self.expect(.right_parenthesis);
+                row_count += 1;
+            }
+        }
+        try self.expect(.right_brace);
+
+        const owned_variables = try variables.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_variables);
+        const owned_cells = try cells.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_cells);
+        const id = self.query.values_blocks.items.len;
+        try self.query.values_blocks.append(self.allocator, .{
+            .variables = owned_variables,
+            .cells = owned_cells,
+            .row_count = row_count,
+        });
+        return id;
+    }
+
+    fn parseDataValue(self: *Parser) ParseError!DataValue {
+        const token = try self.take();
+        if (token.tag == .undef) return .undefined;
+        const term = try self.parseGraphTermToken(token);
+        return switch (term) {
+            .iri, .literal => .{ .term = term },
+            else => error.InvalidSyntax,
+        };
     }
 
     fn parsePrologue(self: *Parser) ParseError!void {
@@ -1308,7 +1464,7 @@ const Parser = struct {
         const wildcard = arguments.len == 1 and
             self.query.expressions.items[arguments[0]] == .wildcard;
         if (!builtin) return !wildcard and separator == null;
-        if (std.mem.eql(u8, function, "datatype")) {
+        if (std.mem.eql(u8, function, "datatype") or std.mem.eql(u8, function, "str")) {
             return arguments.len == 1 and !wildcard and !distinct and separator == null;
         }
         if (!isAggregateFunction(function) or arguments.len != 1) return false;
@@ -1328,6 +1484,11 @@ const Parser = struct {
                 try self.parseSubquery();
                 if ((try self.peek()).tag != .right_brace) return error.InvalidSyntax;
                 return;
+            }
+            if ((try self.peek()).tag == .values_keyword) {
+                try self.appendGroupElement(.{ .values = try self.parseValuesClause() });
+                if ((try self.peek()).tag == .dot) _ = try self.take();
+                continue;
             }
             if ((try self.peek()).tag == .left_brace) {
                 try self.parseNestedOrUnionGroup();
@@ -1396,9 +1557,20 @@ const Parser = struct {
         defer self.current_group = parent;
         try self.parseBasicGraphPattern();
         try self.expect(.right_brace);
-        if (!self.projectionAliasesAreValid(projection_items.items, group_id)) {
+        const group_by = try self.parseGroupBy();
+        const trailing_values = if ((try self.peek()).tag == .values_keyword)
+            try self.parseValuesClause()
+        else
+            null;
+        if (!self.projectionAliasesAreValid(projection_items.items, group_id, trailing_values)) {
             return error.InvalidSyntax;
         }
+        if (!self.groupedProjectionIsValid(
+            projection_items.items,
+            select_all,
+            group_by,
+            trailing_values,
+        )) return error.InvalidSyntax;
 
         const variables = try projection_variables.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(variables);
@@ -1415,6 +1587,8 @@ const Parser = struct {
             .projection_variables = variables,
             .projection_items = items,
             .group = group_id,
+            .group_by = group_by,
+            .trailing_values = trailing_values,
         });
     }
 
@@ -1505,6 +1679,10 @@ const Parser = struct {
                     self.query.subqueries.items[id].projection_items,
                     name,
                 )) return true,
+                .values => |id| if (stringSliceContains(
+                    self.query.values_blocks.items[id].variables,
+                    name,
+                )) return true,
                 else => {},
             }
         }
@@ -1515,14 +1693,116 @@ const Parser = struct {
         self: *const Parser,
         items: []const ProjectionItem,
         group_id: GroupId,
+        trailing_values: ?ValuesId,
     ) bool {
         for (items) |item| switch (item) {
-            .expression => |value| if (self.groupContainsVariable(group_id, value.alias)) {
-                return false;
+            .expression => |value| {
+                if (self.groupContainsVariable(group_id, value.alias)) return false;
+                if (trailing_values) |id| {
+                    if (stringSliceContains(
+                        self.query.values_blocks.items[id].variables,
+                        value.alias,
+                    )) return false;
+                }
             },
             .variable => {},
         };
         return true;
+    }
+
+    fn groupedProjectionIsValid(
+        self: *const Parser,
+        items: []const ProjectionItem,
+        select_all: bool,
+        group_by: ExpressionRange,
+        trailing_values: ?ValuesId,
+    ) bool {
+        if (group_by.len == 0) return true;
+        if (select_all) return false;
+        const grouped = self.query.expressionArguments(group_by) orelse return false;
+        for (items) |item| switch (item) {
+            .variable => |name| {
+                var allowed = false;
+                for (grouped) |expression_id| switch (self.query.expressions.items[expression_id]) {
+                    .variable => |grouped_name| if (std.mem.eql(u8, grouped_name, name)) {
+                        allowed = true;
+                        break;
+                    },
+                    else => {},
+                };
+                if (!allowed and trailing_values != null) {
+                    allowed = stringSliceContains(
+                        self.query.values_blocks.items[trailing_values.?].variables,
+                        name,
+                    );
+                }
+                if (!allowed) return false;
+            },
+            .expression => |value| if (!self.expressionIsGroupScoped(
+                value.expression,
+                grouped,
+                trailing_values,
+            )) return false,
+        };
+        return true;
+    }
+
+    fn expressionIsGroupScoped(
+        self: *const Parser,
+        expression_id: ExpressionId,
+        grouped: []const ExpressionId,
+        trailing_values: ?ValuesId,
+    ) bool {
+        return switch (self.query.expressions.items[expression_id]) {
+            .variable => |name| self.groupScopeContainsVariable(grouped, trailing_values, name),
+            .unary => |value| self.expressionIsGroupScoped(
+                value.operand,
+                grouped,
+                trailing_values,
+            ),
+            .binary => |value| self.expressionIsGroupScoped(
+                value.left,
+                grouped,
+                trailing_values,
+            ) and self.expressionIsGroupScoped(value.right, grouped, trailing_values),
+            .membership => |value| scoped: {
+                if (!self.expressionIsGroupScoped(value.operand, grouped, trailing_values)) {
+                    break :scoped false;
+                }
+                for (self.query.expressionArguments(value.values).?) |argument| {
+                    if (!self.expressionIsGroupScoped(argument, grouped, trailing_values)) {
+                        break :scoped false;
+                    }
+                }
+                break :scoped true;
+            },
+            .call => |value| scoped: {
+                if (isAggregateFunction(value.function)) break :scoped true;
+                for (self.query.expressionArguments(value.arguments).?) |argument| {
+                    if (!self.expressionIsGroupScoped(argument, grouped, trailing_values)) {
+                        break :scoped false;
+                    }
+                }
+                break :scoped true;
+            },
+            .iri, .literal, .wildcard, .exists => true,
+        };
+    }
+
+    fn groupScopeContainsVariable(
+        self: *const Parser,
+        grouped: []const ExpressionId,
+        trailing_values: ?ValuesId,
+        name: []const u8,
+    ) bool {
+        for (grouped) |expression_id| switch (self.query.expressions.items[expression_id]) {
+            .variable => |grouped_name| if (std.mem.eql(u8, grouped_name, name)) return true,
+            else => {},
+        };
+        if (trailing_values) |id| {
+            return stringSliceContains(self.query.values_blocks.items[id].variables, name);
+        }
+        return false;
     }
 
     fn parsePropertyList(
@@ -1940,7 +2220,19 @@ fn canStartPredicate(tag: TokenTag) bool {
 
 fn canStartGroupNonTriple(tag: TokenTag) bool {
     return tag == .filter or tag == .bind or tag == .left_brace or tag == .optional or
-        tag == .minus_keyword;
+        tag == .minus_keyword or tag == .values_keyword;
+}
+
+fn canStartGroupCondition(tag: TokenTag) bool {
+    return tag == .variable or tag == .left_parenthesis or tag == .identifier or
+        tag == .iri_reference or tag == .prefixed_name;
+}
+
+fn stringSliceContains(values: []const []const u8, needle: []const u8) bool {
+    for (values) |value| {
+        if (std.mem.eql(u8, value, needle)) return true;
+    }
+    return false;
 }
 
 fn projectionHasVariable(items: []const ProjectionItem, name: []const u8) bool {
@@ -1967,7 +2259,8 @@ fn canStartPath(tag: TokenTag) bool {
 }
 
 fn isBuiltinFunction(value: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(value, "datatype") or isAggregateFunction(value);
+    return std.ascii.eqlIgnoreCase(value, "datatype") or
+        std.ascii.eqlIgnoreCase(value, "str") or isAggregateFunction(value);
 }
 
 fn isSignedNumericToken(token: Token) bool {
@@ -2724,6 +3017,43 @@ test "preserves SELECT subqueries with independent projection scope" {
     try std.testing.expect(first.group != second.group);
 }
 
+test "parses GROUP BY with trailing VALUES scope" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "PREFIX : <urn:ex:> SELECT ?s (STR(?v) AS ?w) { ?s :p ?o } " ++
+            "GROUP BY ?s VALUES ?v { 1 UNDEF }",
+    );
+    defer query.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), query.groupBy().len);
+    try std.testing.expectEqualStrings("s", query.expression(query.groupBy()[0]).?.variable);
+    const values = query.trailingValues().?;
+    try std.testing.expectEqual(@as(usize, 1), values.variables.len);
+    try std.testing.expectEqualStrings("v", values.variables[0]);
+    try std.testing.expectEqual(@as(usize, 2), values.row_count);
+    try std.testing.expectEqualStrings("1", values.value(0, 0).?.term.literal.lexical_form);
+    try std.testing.expect(values.value(1, 0).? == .undefined);
+    try std.testing.expectEqual(@as(usize, 1), query.lower().project.group_by.len);
+}
+
+test "preserves zero-arity and inline multi-variable VALUES blocks" {
+    var empty = try parseQuery(std.testing.allocator, "SELECT * {} VALUES () { () }");
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(usize, 0), empty.trailingValues().?.variables.len);
+    try std.testing.expectEqual(@as(usize, 1), empty.trailingValues().?.row_count);
+
+    var inline_values = try parseQuery(
+        std.testing.allocator,
+        "SELECT * { VALUES (?x ?y) { (1 UNDEF) } }",
+    );
+    defer inline_values.deinit();
+    const elements = inline_values.groupElements(inline_values.root_group.?).?;
+    const values = inline_values.values(elements[0].values).?;
+    try std.testing.expectEqual(@as(usize, 2), values.variables.len);
+    try std.testing.expectEqual(@as(usize, 1), values.row_count);
+    try std.testing.expect(values.value(0, 1).? == .undefined);
+}
+
 test "rejects malformed or unsupported query syntax" {
     const invalid = [_][]const u8{
         "",                                                     "SELECT WHERE {}",                                                    "SELECT * WHERE { ?s <urn:p> }",
@@ -2745,6 +3075,8 @@ test "rejects malformed or unsupported query syntax" {
         "SELECT * { { ?s ?p ?o } UNION }",                      "SELECT * { MINUS ?s ?p ?o }",                                        "SELECT * { FILTER(EXISTS ?s ?p ?o) }",
         "CONSTRUCT { ?s ?p ?o }",                               "SELECT * FROM NAMED WHERE {}",                                       "SELECT * { {} SELECT * {} }",
         "SELECT (1 AS ?x) { SELECT (2 AS ?x) {} }",             "SELECT * { SELECT (1 AS ?x) (2 AS ?x) {} }",                         "SELECT * { SELECT * WHERE }",
+        "SELECT * {} VALUES (?x ?x) { (1 2) }",                 "SELECT * { VALUES (?x ?y) { (1) } }",                                "SELECT * { VALUES (?x ?y) { (1 2 3) } }",
+        "SELECT (?o AS ?x) { ?s ?p ?o } GROUP BY ?s",           "SELECT (STR(?o) AS ?x) { ?s ?p ?o } GROUP BY ?s",                    "SELECT * { VALUES ?x { _:blank } }",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -2758,13 +3090,14 @@ test "rejects malformed or unsupported query syntax" {
 test "query parsing handles every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, expectQueryParses, .{
         "BASE <https://example.com/root/> PREFIX ex: <vocab/> " ++
-            "SELECT DISTINCT ?s (?s + ex:function(?o, 2) AS ?value) WHERE { " ++
+            "SELECT DISTINCT ?s (?s + COUNT(ex:function(?o, 2)) AS ?value) WHERE { " ++
             "[ ex:inner \"hello\\n\"@EN ] (^ex:p/ex:item+|!(ex:skip|^a))? (12.5 true) ; " ++
             "ex:q ?o, \"value\"^^ex:kind . " ++
             "FILTER(?o NOT IN(1, 2)) BIND(?o+1 AS ?bound) " ++
             "FILTER(EXISTS { ?o ex:seen true } && NOT EXISTS { ?o ex:hidden true }) " ++
             "MINUS { ?o ex:removed true } " ++
-            "{ SELECT (?o AS ?nested) { ?o ex:nested true } } }",
+            "{ SELECT (?o AS ?nested) { ?o ex:nested true } } } " ++
+            "GROUP BY ?s VALUES (?extra ?missing) { (1 UNDEF) }",
     });
 }
 
