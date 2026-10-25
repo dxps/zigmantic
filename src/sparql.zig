@@ -420,7 +420,7 @@ pub const Tokenizer = struct {
             .undef
         else if (std.mem.eql(u8, lexeme, "a"))
             .keyword_a
-        else if (std.mem.eql(u8, lexeme, "true") or std.mem.eql(u8, lexeme, "false"))
+        else if (std.ascii.eqlIgnoreCase(lexeme, "true") or std.ascii.eqlIgnoreCase(lexeme, "false"))
             .boolean
         else if (classifyNumeric(lexeme)) |numeric_tag|
             numeric_tag
@@ -1167,9 +1167,10 @@ const Parser = struct {
         if (self.query.form == .select and !self.groupedProjectionIsValid(
             self.query.projection_items.items,
             self.query.select_all,
-            self.query.solution.group_by,
+            self.query.solution,
             self.query.trailing_values,
         )) return error.InvalidSyntax;
+        if (!try self.blankNodeLabelsAreScoped()) return error.InvalidSyntax;
         try self.expect(.eof);
     }
 
@@ -1420,7 +1421,7 @@ const Parser = struct {
         while ((try self.peek()).tag != .right_brace) {
             const subject = try self.parseGraphNode();
             if (canStartPredicate((try self.peek()).tag)) {
-                try self.parsePropertyList(subject.term, .right_brace);
+                try self.parsePropertyList(subject.term);
             } else if (!subject.standalone) {
                 return error.InvalidSyntax;
             }
@@ -1454,7 +1455,8 @@ const Parser = struct {
         try self.expect(.values_keyword);
         var variables: std.ArrayList([]const u8) = .empty;
         defer variables.deinit(self.allocator);
-        if ((try self.peek()).tag == .variable) {
+        const single_variable_form = (try self.peek()).tag == .variable;
+        if (single_variable_form) {
             const variable = try self.take();
             try variables.append(self.allocator, try self.query.own(variable.lexeme));
         } else {
@@ -1473,7 +1475,7 @@ const Parser = struct {
         var cells: std.ArrayList(DataValue) = .empty;
         defer cells.deinit(self.allocator);
         var row_count: usize = 0;
-        if (variables.items.len == 1) {
+        if (single_variable_form) {
             while ((try self.peek()).tag != .right_brace) {
                 try cells.append(self.allocator, try self.parseDataValue());
                 row_count += 1;
@@ -1772,7 +1774,7 @@ const Parser = struct {
                 .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_double),
             }),
             .boolean => self.addExpression(.{
-                .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_namespace ++ "boolean"),
+                .literal = try self.booleanLiteral(token.lexeme),
             }),
             .left_parenthesis => grouped: {
                 const expression_id = try self.parseExpression();
@@ -1956,7 +1958,7 @@ const Parser = struct {
 
             const subject = try self.parseGraphNode();
             if (canStartPredicate((try self.peek()).tag)) {
-                try self.parsePropertyList(subject.term, .right_brace);
+                try self.parsePropertyList(subject.term);
             } else if (!subject.standalone) {
                 return error.InvalidSyntax;
             }
@@ -2022,7 +2024,7 @@ const Parser = struct {
         if (!self.groupedProjectionIsValid(
             projection_items.items,
             select_all,
-            solution.group_by,
+            solution,
             trailing_values,
         )) return error.InvalidSyntax;
 
@@ -2200,15 +2202,15 @@ const Parser = struct {
         self: *const Parser,
         items: []const ProjectionItem,
         select_all: bool,
-        group_by: SolutionRange,
+        solution: SolutionModifiers,
         trailing_values: ?ValuesId,
     ) bool {
-        if (group_by.len == 0) return true;
+        if (!self.queryLevelUsesAggregation(items, solution)) return true;
         if (select_all) return false;
         const grouped = rangeSlice(
             GroupCondition,
             self.query.group_conditions.items,
-            group_by,
+            solution.group_by,
         ) orelse return false;
         for (items) |item| switch (item) {
             .variable => |name| {
@@ -2221,6 +2223,99 @@ const Parser = struct {
             )) return false,
         };
         return true;
+    }
+
+    fn queryLevelUsesAggregation(
+        self: *const Parser,
+        items: []const ProjectionItem,
+        solution: SolutionModifiers,
+    ) bool {
+        if (solution.group_by.len != 0 or solution.having.len != 0) return true;
+        for (items) |item| switch (item) {
+            .expression => |value| if (self.expressionContainsAggregate(value.expression)) {
+                return true;
+            },
+            .variable => {},
+        };
+        const ordering = self.query.orderConditions(solution.order_by) orelse return true;
+        for (ordering) |condition| {
+            if (self.expressionContainsAggregate(condition.expression)) return true;
+        }
+        return false;
+    }
+
+    fn expressionContainsAggregate(self: *const Parser, expression_id: ExpressionId) bool {
+        return switch (self.query.expressions.items[expression_id]) {
+            .unary => |value| self.expressionContainsAggregate(value.operand),
+            .binary => |value| self.expressionContainsAggregate(value.left) or
+                self.expressionContainsAggregate(value.right),
+            .membership => |value| contains: {
+                if (self.expressionContainsAggregate(value.operand)) break :contains true;
+                for (self.query.expressionArguments(value.values).?) |argument| {
+                    if (self.expressionContainsAggregate(argument)) break :contains true;
+                }
+                break :contains false;
+            },
+            .call => |value| contains: {
+                if (isAggregateFunction(value.function)) break :contains true;
+                for (self.query.expressionArguments(value.arguments).?) |argument| {
+                    if (self.expressionContainsAggregate(argument)) break :contains true;
+                }
+                break :contains false;
+            },
+            .variable, .iri, .literal, .wildcard, .exists => false,
+        };
+    }
+
+    fn blankNodeLabelsAreScoped(self: *Parser) ParseError!bool {
+        var scopes: std.StringHashMapUnmanaged(usize) = .empty;
+        defer scopes.deinit(self.allocator);
+        var next_scope: usize = 0;
+
+        for (self.query.groups.items) |group| {
+            var current_scope: ?usize = null;
+            for (group.elements.items) |element| switch (element) {
+                .triple => |triple_index| {
+                    const triple = self.query.where_patterns.items[triple_index];
+                    const scope = current_scope orelse scope: {
+                        const value = next_scope;
+                        next_scope += 1;
+                        current_scope = value;
+                        break :scope value;
+                    };
+                    if (!try self.recordBlankNodeScope(&scopes, triple.subject, scope) or
+                        !try self.recordBlankNodeScope(&scopes, triple.object, scope))
+                    {
+                        return false;
+                    }
+                },
+                .filter => {},
+                else => current_scope = null,
+            };
+        }
+        return true;
+    }
+
+    fn recordBlankNodeScope(
+        self: *Parser,
+        scopes: *std.StringHashMapUnmanaged(usize),
+        term: PatternTerm,
+        scope: usize,
+    ) ParseError!bool {
+        const blank_node = switch (term) {
+            .blank_node => |value| value,
+            else => return true,
+        };
+        const label = switch (blank_node) {
+            .labeled => |value| value,
+            .anonymous => return true,
+        };
+        const entry = try scopes.getOrPut(self.allocator, label);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = scope;
+            return true;
+        }
+        return entry.value_ptr.* == scope;
     }
 
     fn expressionIsGroupScoped(
@@ -2286,11 +2381,7 @@ const Parser = struct {
         return false;
     }
 
-    fn parsePropertyList(
-        self: *Parser,
-        subject: PatternTerm,
-        terminator: TokenTag,
-    ) ParseError!void {
+    fn parsePropertyList(self: *Parser, subject: PatternTerm) ParseError!void {
         if (!canStartPredicate((try self.peek()).tag)) return error.InvalidSyntax;
         while (true) {
             const predicate = try self.parsePredicate();
@@ -2304,8 +2395,7 @@ const Parser = struct {
             if (!saw_semicolon) return;
             const next = (try self.peek()).tag;
             if (canStartPredicate(next)) continue;
-            if (next == terminator or next == .dot) return;
-            return error.InvalidSyntax;
+            return;
         }
     }
 
@@ -2347,7 +2437,7 @@ const Parser = struct {
             .integer => .{ .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_integer) },
             .decimal => .{ .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_decimal) },
             .double => .{ .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_double) },
-            .boolean => .{ .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_namespace ++ "boolean") },
+            .boolean => .{ .literal = try self.booleanLiteral(token.lexeme) },
             else => error.InvalidSyntax,
         };
     }
@@ -2504,7 +2594,7 @@ const Parser = struct {
             _ = try self.take();
             return .{ .term = node };
         }
-        try self.parsePropertyList(node, .right_bracket);
+        try self.parsePropertyList(node);
         try self.expect(.right_bracket);
         return .{ .term = node, .standalone = true };
     }
@@ -2514,7 +2604,6 @@ const Parser = struct {
             _ = try self.take();
             return .{
                 .term = .{ .iri = rdf_mod.rdf_namespace ++ "nil" },
-                .standalone = true,
             };
         }
 
@@ -2603,6 +2692,13 @@ const Parser = struct {
         return .{
             .lexical_form = try self.query.own(lexical_form),
             .datatype = datatype,
+        };
+    }
+
+    fn booleanLiteral(self: *Parser, lexical_form: []const u8) ParseError!Literal {
+        return .{
+            .lexical_form = try self.ownLowercase(lexical_form),
+            .datatype = rdf_mod.xsd_namespace ++ "boolean",
         };
     }
 
@@ -3604,6 +3700,30 @@ test "preserves nested UNION OPTIONAL and MINUS group structure" {
     try std.testing.expectEqual(@as(usize, 1), query.groupElements(root[2].minus).?.len);
 }
 
+test "allows a trailing property-list semicolon before graph-pattern operators" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "SELECT * { <urn:s> <urn:p> <urn:o> ; FILTER(true) " ++
+            "<urn:a> <urn:b> <urn:c> ; OPTIONAL {} }",
+    );
+    defer query.deinit();
+
+    const elements = query.groupElements(query.root_group.?).?;
+    try std.testing.expectEqual(@as(usize, 4), elements.len);
+    try std.testing.expect(elements[1] == .filter);
+    try std.testing.expect(elements[3] == .optional);
+}
+
+test "keeps labeled blank nodes in one basic graph pattern across FILTER" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "ASK { _:node <urn:p> ?o FILTER(?o != 0) _:node <urn:q> ?v }",
+    );
+    defer query.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), query.groupElements(query.root_group.?).?.len);
+}
+
 test "parses EXISTS and NOT EXISTS with query-local groups" {
     var query = try parseQuery(
         std.testing.allocator,
@@ -3777,6 +3897,28 @@ test "preserves zero-arity and inline multi-variable VALUES blocks" {
     try std.testing.expect(values.value(0, 1).? == .undefined);
 }
 
+test "accepts case-insensitive booleans and parenthesized one-variable VALUES rows" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "PREFIX : <urn:ex:> SELECT (TRUE AS ?t) (False AS ?f) {} VALUES (?x) { (:value) }",
+    );
+    defer query.deinit();
+
+    const projection = query.projection().items;
+    try std.testing.expectEqualStrings(
+        "true",
+        query.expression(projection[0].expression.expression).?.literal.lexical_form,
+    );
+    try std.testing.expectEqualStrings(
+        "false",
+        query.expression(projection[1].expression.expression).?.literal.lexical_form,
+    );
+    const values = query.trailingValues().?;
+    try std.testing.expectEqual(@as(usize, 1), values.variables.len);
+    try std.testing.expectEqual(@as(usize, 1), values.row_count);
+    try std.testing.expectEqualStrings("urn:ex:value", values.value(0, 0).?.term.iri);
+}
+
 test "parses complete ordered solution modifiers" {
     var query = try parseQuery(
         std.testing.allocator,
@@ -3868,6 +4010,17 @@ test "rejects malformed or unsupported query syntax" {
         error.InvalidUtf8,
         parseQuery(std.testing.allocator, "SELECT * WHERE { \xff }"),
     );
+}
+
+test "rejects differential-audit scope and standalone-term violations" {
+    const invalid = [_][]const u8{
+        "SELECT * { () }",
+        "SELECT ?p (COUNT(?o) AS ?count) { ?s ?p ?o }",
+        "ASK { _:a ?p ?o OPTIONAL {} _:a ?q ?v }",
+    };
+    for (invalid) |input| {
+        try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
+    }
 }
 
 test "query parsing handles every allocation failure" {

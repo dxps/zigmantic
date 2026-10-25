@@ -182,8 +182,9 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 141 tests; all 827 integrated RDF syntax/evaluation cases still
-  pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
+- The local suite has 145 tests; all 827 integrated RDF syntax/evaluation cases still
+  pass, and the complete 151-test build additionally classifies all 97 pinned SPARQL
+  query-syntax cases.
 
 ## Milestone status
 
@@ -205,19 +206,21 @@ separate packages only after their APIs and release cycles become independently 
   subqueries, ASK, both CONSTRUCT forms, DESCRIBE, dataset clauses, GROUP BY aliases,
   HAVING, ORDER BY, LIMIT/OFFSET, inline/trailing VALUES, GRAPH, and SERVICE/SERVICE
   SILENT; all 97 cases in the pinned query-syntax manifest pass; every SPARQL 1.1
-  built-in call has a strict syntax signature, while evaluation remains incomplete.
+  built-in call has a strict syntax signature; a differential audit parses all 598
+  SPARQL 1.0/1.1 evaluation queries and all 210 positive syntax queries while rejecting
+  all 91 negative syntax queries; evaluation remains incomplete.
 - Milestones 8–14: not started.
 
 ## Milestone 7 fixed plan
 
-Milestone 7 contains 31 tracked increments. After step 7.4.12, 18 are complete and 13
+Milestone 7 contains 31 tracked increments. After step 7.4.13, 19 are complete and 12
 remain. The fixed breakdown is:
 
 - 7.1 — parser/algebra foundation: complete.
 - 7.2 — pinned W3C syntax baseline: complete.
 - 7.3.1–7.3.4 — terms, graph nodes, shorthand, and property paths: complete.
-- 7.4.1–7.4.12 — expression syntax and all four query forms: complete.
-- 7.4.13 — syntax closure, differential checks, and parser hardening.
+- 7.4.1–7.4.13 — expression syntax, all four query forms, syntax closure, differential
+  checks, and parser hardening: complete.
 - 7.5.1–7.5.7 — solution mappings/BGP; expressions; joins and optional operators;
   datasets and services; property paths; grouping/modifiers; subqueries and query forms.
 - 7.6.1–7.6.3 — result model and SELECT/ASK; JSON/XML; CSV/TSV and RDF-form integration.
@@ -228,9 +231,10 @@ work should replace or explicitly revise this list rather than silently extendin
 
 ## Next actions
 
-1. Close remaining syntax gaps and harden the parser (7.4.13).
-2. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
-   store.
+1. Freeze the evaluation-facing solution-mapping boundary and implement BGP matching
+   over the indexed store (7.5.1).
+2. Promote broader W3C parser coverage into a durable automated gate alongside the
+   evaluation manifests introduced in milestone 7.7.
 
 ## Session log
 
@@ -1064,3 +1068,24 @@ work should replace or explicitly revise this list rather than silently extendin
 - Advanced the fixed milestone plan to 18 of 31 increments complete, with 13 remaining.
 - Retained the 97/97 W3C query-syntax baseline; the local suite now has 141 tests and
   the complete build passes all 147 tests.
+
+### 2026-10-25 — SPARQL syntax closure and differential audit
+
+- Audited the parser against the broader pinned W3C SPARQL 1.0/1.1 corpus rather than
+  relying only on the repository's 97-case query-syntax regression manifest.
+- Made boolean keywords case-insensitive while storing canonical lowercase boolean
+  lexical forms.
+- Distinguished the one-variable VALUES shorthand from a parenthesized one-variable
+  tuple so both data-block forms follow their separate grammar productions.
+- Allowed a property list's optional trailing semicolon before graph-pattern operators
+  and rejected an empty collection used as a standalone triple block.
+- Enforced labeled blank-node scope across basic graph-pattern boundaries while keeping
+  FILTER-separated triples in the same basic graph pattern.
+- Enforced projection scope for implicit aggregate groups as well as explicit GROUP BY
+  groups.
+- Differential checks now parse all 598 query-evaluation inputs and all 210 positive
+  syntax inputs and reject all 91 negative syntax inputs from the upstream SPARQL 1.0
+  and 1.1 manifests.
+- Advanced the fixed milestone plan to 19 of 31 increments complete, with 12 remaining.
+- Retained the pinned 97/97 syntax gate; the local suite now has 145 tests and the
+  complete build passes all 151 tests.

@@ -4,15 +4,17 @@ This audit compares the public `sparql` module with the normative grammar in the
 [SPARQL 1.1 Query Language Recommendation](https://www.w3.org/TR/sparql11-query/#grammar).
 It covers query productions; SPARQL Update is milestone 8.
 
-Passing the pinned 97-case W3C query-syntax manifest is a regression baseline, not a
-claim that every grammar production or its evaluation semantics is implemented.
+The pinned 97-case W3C query-syntax manifest remains the repository regression gate.
+A broader differential audit against the pinned upstream corpus also parses all 598
+SPARQL 1.0/1.1 query-evaluation inputs and all 210 positive syntax inputs while
+rejecting all 91 negative syntax inputs. Evaluation semantics are not yet implemented.
 
 ## Query forms and modifiers
 
 | Grammar area | Status | Remaining work |
 | --- | --- | --- |
-| Prologue and dataset clauses | Implemented | Retain coverage while adding query forms. |
-| SELECT and subqueries | Partial | Add remaining graph patterns, expressions, and evaluation. |
+| Prologue and dataset clauses | Syntax implemented | Add dataset evaluation. |
+| SELECT and subqueries | Syntax implemented | Add algebra translation and evaluation. |
 | ASK | Syntax foundation | Add evaluation and result production. |
 | CONSTRUCT | Syntax foundation | Add template instantiation and RDF graph results. |
 | DESCRIBE | Syntax foundation | Define resource-description and result semantics. |
@@ -30,7 +32,7 @@ subqueries.
 
 | Grammar area | Status | Remaining work |
 | --- | --- | --- |
-| Triple blocks and graph-node shorthand | Implemented | Add broader differential and fuzz coverage. |
+| Triple blocks and graph-node shorthand | Syntax implemented | Add fuzz coverage and evaluation. |
 | Property paths | Syntax implemented | Add path evaluation. |
 | Nested groups, UNION, OPTIONAL, and MINUS | Syntax implemented | Add algebra translation and evaluation. |
 | FILTER, BIND, EXISTS, and NOT EXISTS | Syntax foundation | Complete expression coverage and evaluation. |
@@ -46,16 +48,17 @@ evaluation will require a caller-supplied service interface.
 
 Operator precedence, RDF terms, variables, custom IRI calls, `IN`/`NOT IN`, EXISTS,
 NOT EXISTS, all seven aggregate spellings, and every built-in call in production 121
-are represented with function-specific signatures. Built-in evaluation semantics are
-not yet implemented.
+are represented with function-specific signatures. Aggregate projection scope is
+validated for explicit and implicit groups. Built-in evaluation semantics are not yet
+implemented.
 
 ## Data and lexical grammar
 
 IRI and prefixed-name expansion, variables, blank nodes, RDF literals, numeric and
 boolean forms, collections, property lists, VALUES cells, and UNDEF are implemented.
-The existing syntax manifest and local negative tests cover the accepted boundary, but
-the terminal productions should receive a dedicated differential/fuzz audit before a
-full parser-conformance claim.
+The repository syntax manifest, local negative tests, and broader upstream differential
+audit cover the accepted boundary. A full parser-conformance claim still requires the
+corpus to become a durable automated gate plus dedicated fuzzing.
 
 ## Algebra and execution
 
@@ -81,7 +84,8 @@ section 18. Evaluation is not implemented. Remaining execution work includes:
 
 ## Planned implementation order
 
-1. Close remaining syntax gaps and run differential parser checks.
-2. Freeze the first evaluation-ready AST/algebra boundary, then implement solution
+1. Freeze the first evaluation-ready AST/algebra boundary, then implement solution
    mappings and BGP evaluation over the indexed store.
+2. Promote the broader parser audit into a durable conformance gate while evaluation
+   manifests are activated incrementally.
 
