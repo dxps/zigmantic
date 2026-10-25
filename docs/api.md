@@ -127,6 +127,13 @@ without angle brackets.
 references are resolved when a base is available, and prefixed names are expanded into
 their resolved IRIs. The latest repeated declaration supplies a prefix mapping.
 
+`PatternTerm` distinguishes variables, resolved IRIs, blank nodes, and literals.
+Labeled blank nodes retain their source identifier; anonymous `[]` nodes use numeric
+query-local identities. Literal lexical forms and Unicode escapes are decoded during
+parsing. Simple, language-tagged, explicitly typed, integer, decimal, double, and
+boolean forms expose their effective datatype IRIs directly. Predicate `a` is stored as
+the resolved `rdf:type` IRI.
+
 `Query.projection` and `Query.patterns` return borrowed slices. `Query.lower` produces
 an allocation-free `Project(BGP)` algebra view over the same storage. These views remain
 valid only while the query is alive and structurally unchanged. A `Query` must not be

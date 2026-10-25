@@ -232,6 +232,12 @@ prefixed names are stored as IRIs in triple patterns. Percent escapes remain enc
 SPARQL local-name backslash escapes are decoded during expansion. Repeated prefix
 declarations are retained for syntax fidelity and the latest declaration is used.
 
+Triple-pattern terms carry resolved IRIs, labeled or numeric-identity anonymous blank
+nodes, or explicit literals. Literals store a decoded lexical form, datatype IRI, and
+optional normalized language tag. Native numeric and boolean syntax is lowered to the
+corresponding XSD datatype immediately. Anonymous identities occupy a separate union
+variant, preventing generated nodes from colliding with legal source labels.
+
 SPARQL query grammar progress is measured against the pinned W3C SPARQL 1.1
 query-syntax manifest. The runner executes every manifest entry and keeps an exact
 test-ID baseline for unsupported positive syntax, so new grammar support removes named

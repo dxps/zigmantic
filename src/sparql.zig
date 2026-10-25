@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const iri_mod = @import("iri.zig");
+const rdf_mod = @import("rdf.zig");
 
 pub const ParseError = std.mem.Allocator.Error || error{
     InvalidUtf8,
@@ -18,8 +19,19 @@ pub const TokenTag = enum {
     variable,
     iri_reference,
     prefixed_name,
+    blank_node_label,
+    string_literal,
+    language_tag,
+    datatype_marker,
+    integer,
+    decimal,
+    double,
+    boolean,
+    keyword_a,
     left_brace,
     right_brace,
+    left_bracket,
+    right_bracket,
     dot,
     star,
     identifier,
@@ -52,10 +64,19 @@ pub const Tokenizer = struct {
         return switch (self.input[self.index]) {
             '{' => self.single(.left_brace),
             '}' => self.single(.right_brace),
-            '.' => self.single(.dot),
+            '[' => self.single(.left_bracket),
+            ']' => self.single(.right_bracket),
+            '.' => if (self.index + 1 < self.input.len and
+                std.ascii.isDigit(self.input[self.index + 1]))
+                self.word(offset)
+            else
+                self.single(.dot),
             '*' => self.single(.star),
             '?', '$' => self.variable(),
             '<' => self.iriReference(),
+            '"', '\'' => self.stringLiteral(),
+            '@' => self.languageTag(),
+            '^' => self.datatypeMarker(),
             else => self.word(offset),
         };
     }
@@ -89,14 +110,92 @@ pub const Tokenizer = struct {
                 self.index += 1;
                 return .{ .tag = .iri_reference, .lexeme = value, .offset = offset };
             }
+            if (byte == '\\') {
+                self.index += 1;
+                const digits: usize = if (self.index < self.input.len and self.input[self.index] == 'u')
+                    4
+                else if (self.index < self.input.len and self.input[self.index] == 'U')
+                    8
+                else
+                    return error.InvalidSyntax;
+                self.index += 1;
+                if (self.input.len - self.index < digits) return error.InvalidSyntax;
+                self.index += digits;
+                continue;
+            }
             if (byte <= 0x20 or byte == '<' or byte == '"' or byte == '{' or byte == '}' or
-                byte == '|' or byte == '^' or byte == '`' or byte == '\\')
+                byte == '|' or byte == '^' or byte == '`')
             {
                 return error.InvalidSyntax;
             }
             self.index += utf8Length(self.input, self.index) orelse return error.InvalidSyntax;
         }
         return error.InvalidSyntax;
+    }
+
+    fn stringLiteral(self: *Tokenizer) ParseError!Token {
+        const offset = self.index;
+        const quote = self.input[self.index];
+        const long = self.index + 2 < self.input.len and
+            self.input[self.index + 1] == quote and self.input[self.index + 2] == quote;
+        const delimiter_length: usize = if (long) 3 else 1;
+        self.index += delimiter_length;
+        const value_start = self.index;
+
+        while (self.index < self.input.len) {
+            if (self.input[self.index] == '\\') {
+                self.index += 1;
+                if (self.index == self.input.len) return error.InvalidSyntax;
+                self.index += utf8Length(self.input, self.index) orelse return error.InvalidSyntax;
+                continue;
+            }
+            if (!long and (self.input[self.index] == '\n' or self.input[self.index] == '\r')) {
+                return error.InvalidSyntax;
+            }
+            if (self.input[self.index] == quote) {
+                if (!long) {
+                    const value = self.input[value_start..self.index];
+                    self.index += 1;
+                    return .{ .tag = .string_literal, .lexeme = value, .offset = offset };
+                }
+                if (self.index + 2 < self.input.len and
+                    self.input[self.index + 1] == quote and
+                    self.input[self.index + 2] == quote)
+                {
+                    const value = self.input[value_start..self.index];
+                    self.index += 3;
+                    return .{ .tag = .string_literal, .lexeme = value, .offset = offset };
+                }
+            }
+            self.index += utf8Length(self.input, self.index) orelse return error.InvalidSyntax;
+        }
+        return error.InvalidSyntax;
+    }
+
+    fn languageTag(self: *Tokenizer) ParseError!Token {
+        const offset = self.index;
+        self.index += 1;
+        const value_start = self.index;
+        while (self.index < self.input.len and
+            (std.ascii.isAlphanumeric(self.input[self.index]) or self.input[self.index] == '-'))
+        {
+            self.index += 1;
+        }
+        if (!isLanguageTag(self.input[value_start..self.index])) return error.InvalidSyntax;
+        return .{
+            .tag = .language_tag,
+            .lexeme = self.input[value_start..self.index],
+            .offset = offset,
+        };
+    }
+
+    fn datatypeMarker(self: *Tokenizer) ParseError!Token {
+        const offset = self.index;
+        if (self.index + 1 >= self.input.len or self.input[self.index + 1] != '^') {
+            return error.InvalidSyntax;
+        }
+        self.index += 2;
+        return .{ .tag = .datatype_marker, .lexeme = "^^", .offset = offset };
     }
 
     fn word(self: *Tokenizer, offset: usize) ParseError!Token {
@@ -127,6 +226,14 @@ pub const Tokenizer = struct {
             .reduced
         else if (std.ascii.eqlIgnoreCase(lexeme, "WHERE"))
             .where
+        else if (std.mem.eql(u8, lexeme, "a"))
+            .keyword_a
+        else if (std.mem.eql(u8, lexeme, "true") or std.mem.eql(u8, lexeme, "false"))
+            .boolean
+        else if (classifyNumeric(lexeme)) |numeric_tag|
+            numeric_tag
+        else if (std.mem.startsWith(u8, lexeme, "_:") and isBlankNodeLabel(lexeme[2..]))
+            .blank_node_label
         else if (isPrefixedName(lexeme))
             .prefixed_name
         else
@@ -162,6 +269,19 @@ pub const Modifier = enum {
 pub const PatternTerm = union(enum) {
     variable: []const u8,
     iri: []const u8,
+    blank_node: BlankNode,
+    literal: Literal,
+};
+
+pub const BlankNode = union(enum) {
+    labeled: []const u8,
+    anonymous: usize,
+};
+
+pub const Literal = struct {
+    lexical_form: []const u8,
+    datatype: []const u8,
+    language: ?[]const u8 = null,
 };
 
 pub const TriplePattern = struct {
@@ -190,6 +310,7 @@ pub const Query = struct {
     projection_variables: std.ArrayList([]const u8) = .empty,
     where_patterns: std.ArrayList(TriplePattern) = .empty,
     owned_strings: std.ArrayList([]u8) = .empty,
+    next_blank_node: usize = 0,
 
     fn init(allocator: std.mem.Allocator) Query {
         return .{
@@ -341,9 +462,9 @@ const Parser = struct {
         if ((try self.peek()).tag == .right_brace) return;
         while (true) {
             try self.query.where_patterns.append(self.allocator, .{
-                .subject = try self.parseTerm(),
-                .predicate = try self.parseTerm(),
-                .object = try self.parseTerm(),
+                .subject = try self.parseGraphTerm(),
+                .predicate = try self.parsePredicate(),
+                .object = try self.parseGraphTerm(),
             });
             const separator = try self.peek();
             if (separator.tag == .right_brace) return;
@@ -353,24 +474,133 @@ const Parser = struct {
         }
     }
 
-    fn parseTerm(self: *Parser) ParseError!PatternTerm {
+    fn parseGraphTerm(self: *Parser) ParseError!PatternTerm {
         const token = try self.take();
         return switch (token.tag) {
             .variable => .{ .variable = try self.query.own(token.lexeme) },
             .iri_reference => .{ .iri = try self.resolveIri(token.lexeme) },
             .prefixed_name => .{ .iri = try self.expandPrefixedName(token.lexeme) },
+            .blank_node_label => .{ .blank_node = .{
+                .labeled = try self.query.own(token.lexeme[2..]),
+            } },
+            .left_bracket => self.parseAnonymousBlankNode(),
+            .string_literal => .{ .literal = try self.parseStringLiteral(token.lexeme) },
+            .integer => .{ .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_integer) },
+            .decimal => .{ .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_decimal) },
+            .double => .{ .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_double) },
+            .boolean => .{ .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_namespace ++ "boolean") },
             else => error.InvalidSyntax,
         };
     }
 
+    fn parsePredicate(self: *Parser) ParseError!PatternTerm {
+        const token = try self.take();
+        return switch (token.tag) {
+            .variable => .{ .variable = try self.query.own(token.lexeme) },
+            .iri_reference => .{ .iri = try self.resolveIri(token.lexeme) },
+            .prefixed_name => .{ .iri = try self.expandPrefixedName(token.lexeme) },
+            .keyword_a => .{ .iri = rdf_mod.rdf_namespace ++ "type" },
+            else => error.InvalidSyntax,
+        };
+    }
+
+    fn parseAnonymousBlankNode(self: *Parser) ParseError!PatternTerm {
+        try self.expect(.right_bracket);
+        const id = self.query.next_blank_node;
+        self.query.next_blank_node += 1;
+        return .{ .blank_node = .{ .anonymous = id } };
+    }
+
+    fn parseStringLiteral(self: *Parser, raw: []const u8) ParseError!Literal {
+        const lexical_form = try self.decodeString(raw);
+        const suffix = try self.peek();
+        if (suffix.tag == .language_tag) {
+            _ = try self.take();
+            const language = try self.ownLowercase(suffix.lexeme);
+            return .{
+                .lexical_form = lexical_form,
+                .datatype = rdf_mod.rdf_lang_string,
+                .language = language,
+            };
+        }
+        if (suffix.tag == .datatype_marker) {
+            _ = try self.take();
+            const datatype_token = try self.take();
+            const datatype = switch (datatype_token.tag) {
+                .iri_reference => try self.resolveIri(datatype_token.lexeme),
+                .prefixed_name => try self.expandPrefixedName(datatype_token.lexeme),
+                else => return error.InvalidSyntax,
+            };
+            return .{ .lexical_form = lexical_form, .datatype = datatype };
+        }
+        return .{ .lexical_form = lexical_form, .datatype = rdf_mod.xsd_string };
+    }
+
+    fn numericLiteral(
+        self: *Parser,
+        lexical_form: []const u8,
+        datatype: []const u8,
+    ) ParseError!Literal {
+        return .{
+            .lexical_form = try self.query.own(lexical_form),
+            .datatype = datatype,
+        };
+    }
+
+    fn decodeString(self: *Parser, raw: []const u8) ParseError![]const u8 {
+        var decoded: std.ArrayList(u8) = .empty;
+        errdefer decoded.deinit(self.allocator);
+        var index: usize = 0;
+        while (index < raw.len) {
+            if (raw[index] != '\\') {
+                const start = index;
+                index += utf8Length(raw, index) orelse return error.InvalidSyntax;
+                try decoded.appendSlice(self.allocator, raw[start..index]);
+                continue;
+            }
+            index += 1;
+            if (index >= raw.len) return error.InvalidSyntax;
+            switch (raw[index]) {
+                't' => try decoded.append(self.allocator, '\t'),
+                'b' => try decoded.append(self.allocator, 0x08),
+                'n' => try decoded.append(self.allocator, '\n'),
+                'r' => try decoded.append(self.allocator, '\r'),
+                'f' => try decoded.append(self.allocator, 0x0c),
+                '"' => try decoded.append(self.allocator, '"'),
+                '\'' => try decoded.append(self.allocator, '\''),
+                '\\' => try decoded.append(self.allocator, '\\'),
+                'u', 'U' => {
+                    try decodeUnicodeEscape(self.allocator, &decoded, raw, &index);
+                    continue;
+                },
+                else => return error.InvalidSyntax,
+            }
+            index += 1;
+        }
+        const owned = try decoded.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned);
+        try self.query.owned_strings.append(self.allocator, owned);
+        return owned;
+    }
+
+    fn ownLowercase(self: *Parser, value: []const u8) ParseError![]const u8 {
+        const owned = try self.allocator.alloc(u8, value.len);
+        errdefer self.allocator.free(owned);
+        for (value, 0..) |byte, index| owned[index] = std.ascii.toLower(byte);
+        try self.query.owned_strings.append(self.allocator, owned);
+        return owned;
+    }
+
     fn resolveIri(self: *Parser, value: []const u8) ParseError![]const u8 {
-        if (iri_mod.isAbsolute(value) or self.query.base_iri == null) {
-            return self.query.own(value);
+        const decoded = try decodeIriReference(self.allocator, value);
+        defer self.allocator.free(decoded);
+        if (iri_mod.isAbsolute(decoded) or self.query.base_iri == null) {
+            return self.query.own(decoded);
         }
         const resolved = iri_mod.resolveAlloc(
             self.allocator,
             self.query.base_iri.?,
-            value,
+            decoded,
         ) catch |err| return mapIriError(err);
         errdefer self.allocator.free(resolved);
         try self.query.owned_strings.append(self.allocator, resolved);
@@ -433,6 +663,126 @@ fn isWordDelimiter(byte: u8) bool {
         byte == '*' or byte == '<' or byte == '>' or byte == '?' or byte == '$' or
         byte == '(' or byte == ')' or byte == '[' or byte == ']' or byte == ';' or
         byte == ',';
+}
+
+fn classifyNumeric(value: []const u8) ?TokenTag {
+    if (value.len == 0) return null;
+    var index: usize = 0;
+    if (value[index] == '+' or value[index] == '-') {
+        index += 1;
+        if (index == value.len) return null;
+    }
+
+    const integer_start = index;
+    while (index < value.len and std.ascii.isDigit(value[index])) index += 1;
+    const integer_digits = index - integer_start;
+
+    var has_dot = false;
+    var fraction_digits: usize = 0;
+    if (index < value.len and value[index] == '.') {
+        has_dot = true;
+        index += 1;
+        const fraction_start = index;
+        while (index < value.len and std.ascii.isDigit(value[index])) index += 1;
+        fraction_digits = index - fraction_start;
+    }
+
+    var has_exponent = false;
+    if (index < value.len and (value[index] == 'e' or value[index] == 'E')) {
+        has_exponent = true;
+        index += 1;
+        if (index < value.len and (value[index] == '+' or value[index] == '-')) index += 1;
+        const exponent_start = index;
+        while (index < value.len and std.ascii.isDigit(value[index])) index += 1;
+        if (index == exponent_start) return null;
+    }
+    if (index != value.len) return null;
+
+    if (has_exponent and (integer_digits > 0 or fraction_digits > 0)) return .double;
+    if (has_dot and fraction_digits > 0) return .decimal;
+    if (!has_dot and integer_digits > 0) return .integer;
+    return null;
+}
+
+fn isBlankNodeLabel(value: []const u8) bool {
+    if (value.len == 0) return false;
+    var index: usize = 0;
+    const first = nextCodepoint(value, &index) orelse return false;
+    if (!(isPnCharsU(first) or (first >= '0' and first <= '9'))) return false;
+    var may_end = true;
+    while (index < value.len) {
+        const codepoint = nextCodepoint(value, &index) orelse return false;
+        if (codepoint == '.') {
+            may_end = false;
+        } else if (isPnChars(codepoint)) {
+            may_end = true;
+        } else {
+            return false;
+        }
+    }
+    return may_end;
+}
+
+fn isLanguageTag(value: []const u8) bool {
+    if (value.len == 0 or !std.ascii.isAlphabetic(value[0])) return false;
+    var previous_hyphen = true;
+    for (value) |byte| {
+        if (byte == '-') {
+            if (previous_hyphen) return false;
+            previous_hyphen = true;
+        } else if (std.ascii.isAlphanumeric(byte)) {
+            previous_hyphen = false;
+        } else {
+            return false;
+        }
+    }
+    return !previous_hyphen;
+}
+
+fn decodeIriReference(allocator: std.mem.Allocator, raw: []const u8) ParseError![]u8 {
+    var decoded: std.ArrayList(u8) = .empty;
+    errdefer decoded.deinit(allocator);
+    var index: usize = 0;
+    while (index < raw.len) {
+        if (raw[index] == '\\') {
+            index += 1;
+            try decodeUnicodeEscape(allocator, &decoded, raw, &index);
+        } else {
+            const start = index;
+            index += utf8Length(raw, index) orelse return error.InvalidSyntax;
+            try decoded.appendSlice(allocator, raw[start..index]);
+        }
+    }
+    return decoded.toOwnedSlice(allocator);
+}
+
+fn decodeUnicodeEscape(
+    allocator: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    input: []const u8,
+    index: *usize,
+) ParseError!void {
+    if (index.* >= input.len) return error.InvalidSyntax;
+    const digits: usize = switch (input[index.*]) {
+        'u' => 4,
+        'U' => 8,
+        else => return error.InvalidSyntax,
+    };
+    index.* += 1;
+    if (input.len - index.* < digits) return error.InvalidSyntax;
+    var codepoint: u32 = 0;
+    for (input[index.* .. index.* + digits]) |digit| {
+        codepoint = codepoint * 16 +
+            (std.fmt.charToDigit(digit, 16) catch return error.InvalidSyntax);
+    }
+    index.* += digits;
+    if (codepoint > 0x10ffff or (codepoint >= 0xd800 and codepoint <= 0xdfff)) {
+        return error.InvalidSyntax;
+    }
+    var encoded: [4]u8 = undefined;
+    const length = std.unicode.utf8Encode(@intCast(codepoint), &encoded) catch
+        return error.InvalidSyntax;
+    try output.appendSlice(allocator, encoded[0..length]);
 }
 
 fn utf8Length(input: []const u8, index: usize) ?usize {
@@ -697,6 +1047,58 @@ test "expands SPARQL prefixed-name escapes and uses the latest declaration" {
     );
 }
 
+test "parses blank nodes language literals and the rdf:type abbreviation" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "SELECT * { _:subject a \"hello\\nworld\"@EN-Latn . [] <urn:p> _:1_2_3_ }",
+    );
+    defer query.deinit();
+
+    try std.testing.expectEqualStrings("subject", query.patterns()[0].subject.blank_node.labeled);
+    try std.testing.expectEqualStrings(
+        rdf_mod.rdf_namespace ++ "type",
+        query.patterns()[0].predicate.iri,
+    );
+    const language_literal = query.patterns()[0].object.literal;
+    try std.testing.expectEqualStrings("hello\nworld", language_literal.lexical_form);
+    try std.testing.expectEqualStrings(rdf_mod.rdf_lang_string, language_literal.datatype);
+    try std.testing.expectEqualStrings("en-latn", language_literal.language.?);
+    try std.testing.expectEqual(@as(usize, 0), query.patterns()[1].subject.blank_node.anonymous);
+    try std.testing.expectEqualStrings("1_2_3_", query.patterns()[1].object.blank_node.labeled);
+}
+
+test "parses typed string numeric and boolean literals" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "PREFIX ex: <https://example.com/> SELECT * { " ++
+            "?s ex:a 'value'^^ex:kind . " ++
+            "?s ex:b +42 . ?s ex:c -.5 . ?s ex:d 6.02e23 . ?s ex:e true }",
+    );
+    defer query.deinit();
+
+    const typed = query.patterns()[0].object.literal;
+    try std.testing.expectEqualStrings("value", typed.lexical_form);
+    try std.testing.expectEqualStrings("https://example.com/kind", typed.datatype);
+    try std.testing.expectEqualStrings(rdf_mod.xsd_integer, query.patterns()[1].object.literal.datatype);
+    try std.testing.expectEqualStrings(rdf_mod.xsd_decimal, query.patterns()[2].object.literal.datatype);
+    try std.testing.expectEqualStrings(rdf_mod.xsd_double, query.patterns()[3].object.literal.datatype);
+    try std.testing.expectEqualStrings(
+        rdf_mod.xsd_namespace ++ "boolean",
+        query.patterns()[4].object.literal.datatype,
+    );
+}
+
+test "decodes Unicode escapes in strings and IRI references" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "SELECT * { ?s <urn:\\u0070> '''\\U0001F46A''' }",
+    );
+    defer query.deinit();
+
+    try std.testing.expectEqualStrings("urn:p", query.patterns()[0].predicate.iri);
+    try std.testing.expectEqualStrings("👪", query.patterns()[0].object.literal.lexical_form);
+}
+
 test "lowers SELECT syntax to project over a BGP" {
     var query = try parseQuery(std.testing.allocator, "SELECT ?s WHERE { ?s <urn:p> <urn:o> }");
     defer query.deinit();
@@ -707,11 +1109,13 @@ test "lowers SELECT syntax to project over a BGP" {
 
 test "rejects malformed or unsupported query syntax" {
     const invalid = [_][]const u8{
-        "",                                                     "SELECT WHERE {}",                    "SELECT * WHERE { ?s <urn:p> }",
-        "SELECT * WHERE { ?s <urn:p> \"literal\" }",            "ASK {}",                             "SELECT * WHERE { ?s <broken iri> ?o }",
-        "SELECT ?not-valid WHERE {}",                           "PREFIX ex:bad <urn:ex> SELECT * {}", "PREFIX bad <urn:ex> SELECT * {}",
-        "PREFIX ex: <urn:ex> SELECT * { ex:s missing:p ex:o }", "BASE not-an-iri SELECT * {}",        "PREFIX ex: <urn:ex> SELECT * { ex:a%ZZ ex:p ex:o }",
-        "PREFIX ex: <urn:ex> SELECT * { ex:a\\q ex:p ex:o }",
+        "",                                                     "SELECT WHERE {}",                               "SELECT * WHERE { ?s <urn:p> }",
+        "SELECT * WHERE { ?s \"literal\" ?o }",                 "ASK {}",                                        "SELECT * WHERE { ?s <broken iri> ?o }",
+        "SELECT ?not-valid WHERE {}",                           "PREFIX ex:bad <urn:ex> SELECT * {}",            "PREFIX bad <urn:ex> SELECT * {}",
+        "PREFIX ex: <urn:ex> SELECT * { ex:s missing:p ex:o }", "BASE not-an-iri SELECT * {}",                   "PREFIX ex: <urn:ex> SELECT * { ex:a%ZZ ex:p ex:o }",
+        "PREFIX ex: <urn:ex> SELECT * { ex:a\\q ex:p ex:o }",   "SELECT * { ?s <urn:p> \"bad\\q\" }",            "SELECT * { ?s <urn:p> \"unterminated }",
+        "SELECT * { ?s <urn:p> \"value\"@en--US }",             "SELECT * { ?s <urn:p> \"value\"^^_:datatype }", "SELECT * { _:trailing. <urn:p> <urn:o> }",
+        "SELECT * { ?s <urn:p> \"\\uD800\" }",                  "SELECT * { ?s <urn:\\U00110000> ?o }",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -725,12 +1129,13 @@ test "rejects malformed or unsupported query syntax" {
 test "query parsing handles every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, expectQueryParses, .{
         "BASE <https://example.com/root/> PREFIX ex: <vocab/> " ++
-            "SELECT DISTINCT ?s ?o WHERE { ?s ex:p ?o . ?o <relative> ex:value }",
+            "SELECT DISTINCT ?s ?o WHERE { _:s a \"hello\\n\"@EN . " ++
+            "[] ex:p 12.5 . ?s <relative> \"value\"^^ex:kind }",
     });
 }
 
 fn expectQueryParses(allocator: std.mem.Allocator, input: []const u8) !void {
     var query = try parseQuery(allocator, input);
     defer query.deinit();
-    try std.testing.expectEqual(@as(usize, 2), query.patterns().len);
+    try std.testing.expectEqual(@as(usize, 3), query.patterns().len);
 }

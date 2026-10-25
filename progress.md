@@ -178,12 +178,12 @@ separate packages only after their APIs and release cycles become independently 
   syntax tree, and a borrowed `Project(BGP)` algebra boundary for the first SPARQL 1.1
   query slice.
 - The official SPARQL 1.1 query-syntax manifest is pinned and vendored with all 97
-  referenced queries; the baseline passes all 32 negative cases and eight positive
-  cases, with the remaining 57 positive cases tracked by exact test ID.
+  referenced queries; the baseline passes all 32 negative cases and twelve positive
+  cases, with the remaining 53 positive cases tracked by exact test ID.
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 115 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 118 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -198,14 +198,14 @@ separate packages only after their APIs and release cycles become independently 
   exposed by `DatatypeProfile`.
 - Milestone 7 — SPARQL 1.1 query: in progress; tokenizer, ownership, parser, and algebra
   foundations are implemented for SELECT projection over basic variable/IRI patterns;
-  BASE/PREFIX prologues, relative IRI resolution, and prefixed names are supported, with
-  the official query-syntax suite pinned to an exact baseline.
+  BASE/PREFIX prologues, relative IRI resolution, prefixed names, blank nodes, RDF
+  literals, and native literal forms are supported, with the official query-syntax
+  suite pinned to an exact baseline.
 - Milestones 8–14: not started.
 
 ## Next actions
 
-1. Add shared SPARQL RDF-term grammar for blank nodes, literals, numeric/boolean forms,
-   and the `a` predicate abbreviation.
+1. Add SPARQL triple shorthand, collections, and blank-node property lists.
 2. Clear the corresponding official positive-syntax failures as grammar coverage grows.
 
 ## Session log
@@ -788,3 +788,24 @@ separate packages only after their APIs and release cycles become independently 
   through `test_pn_07`, and `test_pn_09`.
 - The official SPARQL baseline now passes 40/97 cases with 57 exact expected failures;
   the local suite has 115 tests and the complete build has 121 tests.
+
+### 2026-10-25 — SPARQL RDF-term grammar
+
+- Extended triple-pattern terms with labeled and collision-safe anonymous blank nodes
+  plus explicit literal values containing lexical form, datatype IRI, and optional
+  normalized language tag.
+- Added short and long single- and double-quoted strings, the full RDF string escape
+  set, Unicode escapes, language suffixes, and IRI or prefixed-name datatypes.
+- Added integer, decimal, double, and boolean native literal forms with their RDF/XSD
+  datatypes.
+- Implemented Unicode escapes in IRI references and the `a` predicate abbreviation as
+  `rdf:type`.
+- Kept anonymous blank-node identities structurally separate from source labels so the
+  two forms cannot alias accidentally.
+- Added malformed literal, predicate-position, blank-node, language, datatype, and
+  exhaustive allocation-failure coverage.
+- Cleared four official positive syntax failures: `test_pn_08`,
+  `test_codepoint_escape_01`, `test_codepoint_boundaries_04`, and
+  `test_codepoint_boundaries_escaped_05`.
+- The official SPARQL baseline now passes 44/97 cases with 53 exact expected failures;
+  the local suite has 118 tests and the complete build has 124 tests.
