@@ -182,7 +182,7 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 135 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 136 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -204,15 +204,37 @@ separate packages only after their APIs and release cycles become independently 
   FILTER, BIND, nested groups, OPTIONAL, UNION, MINUS, EXISTS/NOT EXISTS, SELECT
   subqueries, ASK, CONSTRUCT WHERE, dataset clauses, GROUP BY aliases, HAVING, ORDER BY,
   LIMIT/OFFSET, inline/trailing VALUES, GRAPH, and SERVICE/SERVICE SILENT; all 97 cases
-  in the pinned query-syntax manifest pass, while grammar absent from that manifest and
-  query evaluation remain incomplete.
+  in the pinned query-syntax manifest pass; core term and numeric built-ins have strict
+  signatures, while remaining grammar and query evaluation are incomplete.
 - Milestones 8–14: not started.
+
+## Milestone 7 fixed plan
+
+Milestone 7 contains 31 tracked increments. After step 7.4.9, 15 are complete and 16
+remain. The fixed breakdown is:
+
+- 7.1 — parser/algebra foundation: complete.
+- 7.2 — pinned W3C syntax baseline: complete.
+- 7.3.1–7.3.4 — terms, graph nodes, shorthand, and property paths: complete.
+- 7.4.1–7.4.9 — expressions through core scalar built-ins: complete.
+- 7.4.10 — string, regex, and RDF-literal constructor built-ins.
+- 7.4.11 — temporal, hash, UUID, and conditional built-ins.
+- 7.4.12 — DESCRIBE and explicit CONSTRUCT templates.
+- 7.4.13 — syntax closure, differential checks, and parser hardening.
+- 7.5.1–7.5.7 — solution mappings/BGP; expressions; joins and optional operators;
+  datasets and services; property paths; grouping/modifiers; subqueries and query forms.
+- 7.6.1–7.6.3 — result model and SELECT/ASK; JSON/XML; CSV/TSV and RDF-form integration.
+- 7.7.1–7.7.2 — W3C evaluation manifests; fuzzing, performance, and public-API audit.
+
+The count is a tracking contract. A step may need corrective commits, but new feature
+work should replace or explicitly revise this list rather than silently extending it.
 
 ## Next actions
 
-1. Complete built-in expression syntax and arity validation, then add DESCRIBE and
-   explicit CONSTRUCT templates before freezing the first evaluation-ready boundary.
-2. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
+1. Implement string, regex, and RDF-literal constructor built-ins (7.4.10).
+2. Implement temporal, hash, UUID, and conditional built-ins (7.4.11), then add
+   DESCRIBE and explicit CONSTRUCT templates (7.4.12).
+3. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
    store.
 
 ## Session log
@@ -989,3 +1011,18 @@ separate packages only after their APIs and release cycles become independently 
   allocation-failure coverage.
 - Retained the 97/97 W3C query-syntax baseline; the local suite now has 135 tests and
   the complete build passes all 141 tests.
+
+### 2026-10-25 — SPARQL core scalar built-ins
+
+- Added STR, LANG, LANGMATCHES, DATATYPE, BOUND, IRI, URI, BNODE, RAND, ABS, CEIL,
+  FLOOR, ROUND, sameTerm, isIRI/isURI, isBLANK, isLITERAL, and isNUMERIC recognition.
+- Centralized scalar signatures as zero, unary, binary, optional-unary, or
+  variable-only calls while retaining aggregate-specific validation.
+- Rejected invalid arity, BOUND non-variable arguments, scalar DISTINCT/wildcard use,
+  and aggregate-only separators on scalar functions.
+- Added AST-shape, normalized-name, signature, malformed-call, and exhaustive
+  allocation-failure coverage.
+- Fixed the milestone 7 plan at 31 tracked increments: 15 complete after this step and
+  16 remaining.
+- Retained the 97/97 W3C query-syntax baseline; the local suite now has 136 tests and
+  the complete build passes all 142 tests.

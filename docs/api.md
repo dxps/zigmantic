@@ -159,6 +159,12 @@ aggregate call syntax. Aggregate nodes retain DISTINCT, COUNT wildcard, and opti
 GROUP_CONCAT separator information. The lowered Project view carries the complete
 expression and argument tables.
 
+Core scalar built-ins currently include STR, LANG, LANGMATCHES, DATATYPE, BOUND, IRI,
+URI, BNODE, RAND, ABS, CEIL, FLOOR, ROUND, sameTerm, isIRI/isURI, isBLANK, isLITERAL,
+and isNUMERIC. Parsing enforces each function's zero, unary, binary, optional-unary, or
+variable-only signature; DISTINCT, wildcard, and aggregate-only separators are rejected
+for scalar calls.
+
 Expression precedence additionally covers comparison, equality, conditional-and,
 conditional-or, and `IN`/`NOT IN` membership. Membership value lists use the same safe
 argument-range API as calls.

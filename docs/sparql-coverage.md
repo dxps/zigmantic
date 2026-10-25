@@ -45,11 +45,10 @@ evaluation will require a caller-supplied service interface.
 ## Expressions
 
 Operator precedence, RDF terms, variables, custom IRI calls, `IN`/`NOT IN`, EXISTS,
-NOT EXISTS, `STR`, `DATATYPE`, and all seven aggregate spellings are represented.
-Production 121 remains substantially incomplete: language, term-test, numeric, string,
-date/time, hash, UUID, conditional, regex, substring, replace, constructor, and
-variadic built-ins still need syntax validation and evaluation. Function-specific
-arity rules must be encoded rather than treating built-ins as unrestricted calls.
+NOT EXISTS, all seven aggregate spellings, and the core term/numeric built-ins are
+represented with function-specific signatures. Production 121 remains incomplete:
+string, date/time, hash, UUID, conditional, regex, substring, replace, constructor, and
+variadic built-ins still need syntax validation and evaluation.
 
 ## Data and lexical grammar
 

@@ -1735,13 +1735,21 @@ const Parser = struct {
         const wildcard = arguments.len == 1 and
             self.query.expressions.items[arguments[0]] == .wildcard;
         if (!builtin) return !wildcard and separator == null;
-        if (std.mem.eql(u8, function, "datatype") or std.mem.eql(u8, function, "str")) {
-            return arguments.len == 1 and !wildcard and !distinct and separator == null;
+        if (isAggregateFunction(function)) {
+            if (arguments.len != 1) return false;
+            if (wildcard and !std.mem.eql(u8, function, "count")) return false;
+            if (separator != null and !std.mem.eql(u8, function, "group_concat")) return false;
+            return true;
         }
-        if (!isAggregateFunction(function) or arguments.len != 1) return false;
-        if (wildcard and !std.mem.eql(u8, function, "count")) return false;
-        if (separator != null and !std.mem.eql(u8, function, "group_concat")) return false;
-        return true;
+        if (distinct or wildcard or separator != null) return false;
+        return switch (builtinSignature(function) orelse return false) {
+            .zero => arguments.len == 0,
+            .unary => arguments.len == 1,
+            .binary => arguments.len == 2,
+            .zero_or_one => arguments.len <= 1,
+            .bound_variable => arguments.len == 1 and
+                self.query.expressions.items[arguments[0]] == .variable,
+        };
     }
 
     fn parseBasicGraphPattern(self: *Parser) ParseError!void {
@@ -2621,9 +2629,33 @@ fn canStartPath(tag: TokenTag) bool {
         tag == .caret or tag == .bang or tag == .left_parenthesis;
 }
 
+const BuiltinSignature = enum {
+    zero,
+    unary,
+    binary,
+    zero_or_one,
+    bound_variable,
+};
+
 fn isBuiltinFunction(value: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(value, "datatype") or
-        std.ascii.eqlIgnoreCase(value, "str") or isAggregateFunction(value);
+    return builtinSignature(value) != null or isAggregateFunction(value);
+}
+
+fn builtinSignature(value: []const u8) ?BuiltinSignature {
+    const unary = [_][]const u8{
+        "str",   "lang",    "datatype",  "iri",       "uri",
+        "abs",   "ceil",    "floor",     "round",     "isiri",
+        "isuri", "isblank", "isliteral", "isnumeric",
+    };
+    for (unary) |name| {
+        if (std.ascii.eqlIgnoreCase(value, name)) return .unary;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "langmatches") or
+        std.ascii.eqlIgnoreCase(value, "sameterm")) return .binary;
+    if (std.ascii.eqlIgnoreCase(value, "bnode")) return .zero_or_one;
+    if (std.ascii.eqlIgnoreCase(value, "rand")) return .zero;
+    if (std.ascii.eqlIgnoreCase(value, "bound")) return .bound_variable;
+    return null;
 }
 
 fn isSignedNumericToken(token: Token) bool {
@@ -3261,6 +3293,35 @@ test "parses aggregate DISTINCT wildcard and GROUP_CONCAT separator syntax" {
     try std.testing.expectEqual(@as(usize, 2), lowered.expression_arguments.len);
 }
 
+test "parses core term and numeric built-in calls with strict signatures" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "SELECT (BOUND(?x) AS ?bound) (BNODE() AS ?fresh) " ++
+            "(BNODE('id') AS ?named) (RAND() AS ?random) " ++
+            "(LANGMATCHES(LANG(?x), 'en') AS ?matches) " ++
+            "(sameTerm(?x, ?y) AS ?same) (ABS(-1) AS ?absolute) " ++
+            "(isIRI(?x) AS ?is_iri) {}",
+    );
+    defer query.deinit();
+
+    const items = query.projection().items;
+    try std.testing.expectEqual(@as(usize, 8), items.len);
+    const bound = query.expression(items[0].expression.expression).?.call;
+    try std.testing.expectEqualStrings("bound", bound.function);
+    try std.testing.expectEqual(@as(usize, 1), bound.arguments.len);
+    const fresh = query.expression(items[1].expression.expression).?.call;
+    try std.testing.expectEqualStrings("bnode", fresh.function);
+    try std.testing.expectEqual(@as(usize, 0), fresh.arguments.len);
+    const named = query.expression(items[2].expression.expression).?.call;
+    try std.testing.expectEqual(@as(usize, 1), named.arguments.len);
+    const matches = query.expression(items[4].expression.expression).?.call;
+    try std.testing.expectEqualStrings("langmatches", matches.function);
+    try std.testing.expectEqual(@as(usize, 2), matches.arguments.len);
+    const same = query.expression(items[5].expression.expression).?.call;
+    try std.testing.expectEqualStrings("sameterm", same.function);
+    try std.testing.expectEqual(@as(usize, 2), same.arguments.len);
+}
+
 test "parses relational logical and membership expressions in FILTER" {
     var query = try parseQuery(
         std.testing.allocator,
@@ -3515,7 +3576,9 @@ test "rejects malformed or unsupported query syntax" {
         "SELECT ?x {} LIMIT 1.5",                                 "SELECT (?x AS ?g) { ?g ?p ?o } GROUP BY (?x AS ?g)",                 "SELECT ?g {} GROUP BY (?x AS ?g) VALUES ?g { 1 }",
         "SELECT * { GRAPH \"name\" {} }",                         "SELECT * { GRAPH <urn:g> }",                                         "SELECT * { SERVICE SILENT SILENT <urn:s> {} }",
         "SELECT * { SERVICE _:endpoint {} }",                     "SELECT * { SILENT <urn:s> {} }",                                     "SELECT * { GRAPH ?g {} BIND(1 AS ?g) }",
-        "SELECT * { SERVICE ?endpoint {} BIND(1 AS ?endpoint) }",
+        "SELECT * { SERVICE ?endpoint {} BIND(1 AS ?endpoint) }", "SELECT (BOUND(1) AS ?x) {}",                                         "SELECT (RAND(1) AS ?x) {}",
+        "SELECT (BNODE(1, 2) AS ?x) {}",                          "SELECT (LANGMATCHES(?x) AS ?match) {}",                              "SELECT (ABS() AS ?x) {}",
+        "SELECT (sameTerm(?x, ?y, ?z) AS ?same) {}",              "SELECT (isIRI(*) AS ?test) {}",                                      "SELECT (STR(DISTINCT ?x) AS ?value) {}",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -3529,7 +3592,8 @@ test "rejects malformed or unsupported query syntax" {
 test "query parsing handles every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, expectQueryParses, .{
         "BASE <https://example.com/root/> PREFIX ex: <vocab/> " ++
-            "SELECT DISTINCT ?s (?s + COUNT(ex:function(?o, 2)) AS ?value) WHERE { " ++
+            "SELECT DISTINCT ?s (?s + COUNT(ex:function(?o, 2)) AS ?value) " ++
+            "(BOUND(?s) AS ?present) (ABS(-2) AS ?magnitude) WHERE { " ++
             "[ ex:inner \"hello\\n\"@EN ] (^ex:p/ex:item+|!(ex:skip|^a))? (12.5 true) ; " ++
             "ex:q ?o, \"value\"^^ex:kind . " ++
             "FILTER(?o NOT IN(1, 2)) BIND(?o+1 AS ?bound) " ++
