@@ -32,6 +32,10 @@ pub const TokenTag = enum {
     right_brace,
     left_bracket,
     right_bracket,
+    left_parenthesis,
+    right_parenthesis,
+    semicolon,
+    comma,
     dot,
     star,
     identifier,
@@ -66,6 +70,10 @@ pub const Tokenizer = struct {
             '}' => self.single(.right_brace),
             '[' => self.single(.left_bracket),
             ']' => self.single(.right_bracket),
+            '(' => self.single(.left_parenthesis),
+            ')' => self.single(.right_parenthesis),
+            ';' => self.single(.semicolon),
+            ',' => self.single(.comma),
             '.' => if (self.index + 1 < self.input.len and
                 std.ascii.isDigit(self.input[self.index + 1]))
                 self.word(offset)
@@ -394,6 +402,11 @@ pub fn parseQuery(allocator: std.mem.Allocator, input: []const u8) ParseError!Qu
 }
 
 const Parser = struct {
+    const ParsedGraphNode = struct {
+        term: PatternTerm,
+        standalone: bool = false,
+    };
+
     allocator: std.mem.Allocator,
     tokenizer: Tokenizer,
     query: Query,
@@ -461,11 +474,12 @@ const Parser = struct {
     fn parseBasicGraphPattern(self: *Parser) ParseError!void {
         if ((try self.peek()).tag == .right_brace) return;
         while (true) {
-            try self.query.where_patterns.append(self.allocator, .{
-                .subject = try self.parseGraphTerm(),
-                .predicate = try self.parsePredicate(),
-                .object = try self.parseGraphTerm(),
-            });
+            const subject = try self.parseGraphNode();
+            if (canStartPredicate((try self.peek()).tag)) {
+                try self.parsePropertyList(subject.term, .right_brace);
+            } else if (!subject.standalone) {
+                return error.InvalidSyntax;
+            }
             const separator = try self.peek();
             if (separator.tag == .right_brace) return;
             if (separator.tag != .dot) return error.InvalidSyntax;
@@ -474,8 +488,56 @@ const Parser = struct {
         }
     }
 
-    fn parseGraphTerm(self: *Parser) ParseError!PatternTerm {
+    fn parsePropertyList(
+        self: *Parser,
+        subject: PatternTerm,
+        terminator: TokenTag,
+    ) ParseError!void {
+        if (!canStartPredicate((try self.peek()).tag)) return error.InvalidSyntax;
+        while (true) {
+            const predicate = try self.parsePredicate();
+            try self.parseObjectList(subject, predicate);
+
+            var saw_semicolon = false;
+            while ((try self.peek()).tag == .semicolon) {
+                _ = try self.take();
+                saw_semicolon = true;
+            }
+            if (!saw_semicolon) return;
+            const next = (try self.peek()).tag;
+            if (canStartPredicate(next)) continue;
+            if (next == terminator or next == .dot) return;
+            return error.InvalidSyntax;
+        }
+    }
+
+    fn parseObjectList(
+        self: *Parser,
+        subject: PatternTerm,
+        predicate: PatternTerm,
+    ) ParseError!void {
+        while (true) {
+            const object = (try self.parseGraphNode()).term;
+            try self.query.where_patterns.append(self.allocator, .{
+                .subject = subject,
+                .predicate = predicate,
+                .object = object,
+            });
+            if ((try self.peek()).tag != .comma) return;
+            _ = try self.take();
+        }
+    }
+
+    fn parseGraphNode(self: *Parser) ParseError!ParsedGraphNode {
         const token = try self.take();
+        return switch (token.tag) {
+            .left_bracket => self.parseBlankNodePropertyList(),
+            .left_parenthesis => self.parseCollection(),
+            else => .{ .term = try self.parseGraphTermToken(token) },
+        };
+    }
+
+    fn parseGraphTermToken(self: *Parser, token: Token) ParseError!PatternTerm {
         return switch (token.tag) {
             .variable => .{ .variable = try self.query.own(token.lexeme) },
             .iri_reference => .{ .iri = try self.resolveIri(token.lexeme) },
@@ -483,7 +545,6 @@ const Parser = struct {
             .blank_node_label => .{ .blank_node = .{
                 .labeled = try self.query.own(token.lexeme[2..]),
             } },
-            .left_bracket => self.parseAnonymousBlankNode(),
             .string_literal => .{ .literal = try self.parseStringLiteral(token.lexeme) },
             .integer => .{ .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_integer) },
             .decimal => .{ .literal = try self.numericLiteral(token.lexeme, rdf_mod.xsd_decimal) },
@@ -504,11 +565,60 @@ const Parser = struct {
         };
     }
 
-    fn parseAnonymousBlankNode(self: *Parser) ParseError!PatternTerm {
-        try self.expect(.right_bracket);
+    fn freshAnonymousBlankNode(self: *Parser) PatternTerm {
         const id = self.query.next_blank_node;
         self.query.next_blank_node += 1;
         return .{ .blank_node = .{ .anonymous = id } };
+    }
+
+    fn parseBlankNodePropertyList(self: *Parser) ParseError!ParsedGraphNode {
+        const node = self.freshAnonymousBlankNode();
+        if ((try self.peek()).tag == .right_bracket) {
+            _ = try self.take();
+            return .{ .term = node };
+        }
+        try self.parsePropertyList(node, .right_bracket);
+        try self.expect(.right_bracket);
+        return .{ .term = node, .standalone = true };
+    }
+
+    fn parseCollection(self: *Parser) ParseError!ParsedGraphNode {
+        if ((try self.peek()).tag == .right_parenthesis) {
+            _ = try self.take();
+            return .{
+                .term = .{ .iri = rdf_mod.rdf_namespace ++ "nil" },
+                .standalone = true,
+            };
+        }
+
+        const head = self.freshAnonymousBlankNode();
+        var current = head;
+        while (true) {
+            const item = (try self.parseGraphNode()).term;
+            try self.query.where_patterns.append(self.allocator, .{
+                .subject = current,
+                .predicate = .{ .iri = rdf_mod.rdf_namespace ++ "first" },
+                .object = item,
+            });
+
+            if ((try self.peek()).tag == .right_parenthesis) {
+                _ = try self.take();
+                try self.query.where_patterns.append(self.allocator, .{
+                    .subject = current,
+                    .predicate = .{ .iri = rdf_mod.rdf_namespace ++ "rest" },
+                    .object = .{ .iri = rdf_mod.rdf_namespace ++ "nil" },
+                });
+                return .{ .term = head, .standalone = true };
+            }
+
+            const tail = self.freshAnonymousBlankNode();
+            try self.query.where_patterns.append(self.allocator, .{
+                .subject = current,
+                .predicate = .{ .iri = rdf_mod.rdf_namespace ++ "rest" },
+                .object = tail,
+            });
+            current = tail;
+        }
     }
 
     fn parseStringLiteral(self: *Parser, raw: []const u8) ParseError!Literal {
@@ -649,6 +759,11 @@ const Parser = struct {
 
 fn isWhitespace(byte: u8) bool {
     return byte == 0x20 or byte == 0x09 or byte == 0x0a or byte == 0x0d;
+}
+
+fn canStartPredicate(tag: TokenTag) bool {
+    return tag == .variable or tag == .iri_reference or tag == .prefixed_name or
+        tag == .keyword_a;
 }
 
 fn isDelimiter(byte: u8) bool {
@@ -1099,6 +1214,70 @@ test "decodes Unicode escapes in strings and IRI references" {
     try std.testing.expectEqualStrings("👪", query.patterns()[0].object.literal.lexical_form);
 }
 
+test "expands predicate and object list shorthand" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "PREFIX ex: <https://example.com/> " ++
+            "SELECT * { ex:s ex:p ex:o1, ex:o2 ; ex:q \"value\" ;; . }",
+    );
+    defer query.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), query.patterns().len);
+    try std.testing.expectEqualStrings("https://example.com/o1", query.patterns()[0].object.iri);
+    try std.testing.expectEqualStrings("https://example.com/o2", query.patterns()[1].object.iri);
+    try std.testing.expectEqualStrings("https://example.com/q", query.patterns()[2].predicate.iri);
+    try std.testing.expectEqualStrings("value", query.patterns()[2].object.literal.lexical_form);
+}
+
+test "expands blank-node property lists including standalone and nested forms" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "PREFIX ex: <https://example.com/> SELECT * { " ++
+            "[ ex:p ex:o ; ex:q [ ex:r \"nested\" ] ] ex:outer ex:z . " ++
+            "[ ex:standalone ex:value ] . }",
+    );
+    defer query.deinit();
+
+    try std.testing.expectEqual(@as(usize, 5), query.patterns().len);
+    const outer = query.patterns()[0].subject.blank_node.anonymous;
+    const nested = query.patterns()[1].subject.blank_node.anonymous;
+    try std.testing.expect(outer != nested);
+    try std.testing.expectEqual(nested, query.patterns()[2].object.blank_node.anonymous);
+    try std.testing.expectEqual(outer, query.patterns()[3].subject.blank_node.anonymous);
+    try std.testing.expectEqualStrings("https://example.com/outer", query.patterns()[3].predicate.iri);
+}
+
+test "expands RDF collections and handles rdf:nil" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "PREFIX ex: <https://example.com/> " ++
+            "SELECT * { ex:s ex:items (ex:a ex:b) . ex:s ex:empty () }",
+    );
+    defer query.deinit();
+
+    try std.testing.expectEqual(@as(usize, 6), query.patterns().len);
+    try std.testing.expectEqualStrings(
+        rdf_mod.rdf_namespace ++ "first",
+        query.patterns()[0].predicate.iri,
+    );
+    try std.testing.expectEqualStrings(
+        rdf_mod.rdf_namespace ++ "rest",
+        query.patterns()[1].predicate.iri,
+    );
+    try std.testing.expectEqual(
+        query.patterns()[1].object.blank_node.anonymous,
+        query.patterns()[2].subject.blank_node.anonymous,
+    );
+    try std.testing.expectEqualStrings(
+        rdf_mod.rdf_namespace ++ "nil",
+        query.patterns()[3].object.iri,
+    );
+    try std.testing.expectEqualStrings(
+        rdf_mod.rdf_namespace ++ "nil",
+        query.patterns()[5].object.iri,
+    );
+}
+
 test "lowers SELECT syntax to project over a BGP" {
     var query = try parseQuery(std.testing.allocator, "SELECT ?s WHERE { ?s <urn:p> <urn:o> }");
     defer query.deinit();
@@ -1115,7 +1294,9 @@ test "rejects malformed or unsupported query syntax" {
         "PREFIX ex: <urn:ex> SELECT * { ex:s missing:p ex:o }", "BASE not-an-iri SELECT * {}",                   "PREFIX ex: <urn:ex> SELECT * { ex:a%ZZ ex:p ex:o }",
         "PREFIX ex: <urn:ex> SELECT * { ex:a\\q ex:p ex:o }",   "SELECT * { ?s <urn:p> \"bad\\q\" }",            "SELECT * { ?s <urn:p> \"unterminated }",
         "SELECT * { ?s <urn:p> \"value\"@en--US }",             "SELECT * { ?s <urn:p> \"value\"^^_:datatype }", "SELECT * { _:trailing. <urn:p> <urn:o> }",
-        "SELECT * { ?s <urn:p> \"\\uD800\" }",                  "SELECT * { ?s <urn:\\U00110000> ?o }",
+        "SELECT * { ?s <urn:p> \"\\uD800\" }",                  "SELECT * { ?s <urn:\\U00110000> ?o }",          "SELECT * { ?s <urn:p> <urn:o>, }",
+        "SELECT * { ?s ; <urn:p> <urn:o> }",                    "SELECT * { [] }",                               "SELECT * { ?s <urn:p> ( <urn:a> }",
+        "SELECT * { [ <urn:p> <urn:o> }",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -1129,13 +1310,14 @@ test "rejects malformed or unsupported query syntax" {
 test "query parsing handles every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, expectQueryParses, .{
         "BASE <https://example.com/root/> PREFIX ex: <vocab/> " ++
-            "SELECT DISTINCT ?s ?o WHERE { _:s a \"hello\\n\"@EN . " ++
-            "[] ex:p 12.5 . ?s <relative> \"value\"^^ex:kind }",
+            "SELECT DISTINCT ?s ?o WHERE { " ++
+            "[ ex:inner \"hello\\n\"@EN ] ex:p (12.5 true) ; " ++
+            "ex:q ?o, \"value\"^^ex:kind . }",
     });
 }
 
 fn expectQueryParses(allocator: std.mem.Allocator, input: []const u8) !void {
     var query = try parseQuery(allocator, input);
     defer query.deinit();
-    try std.testing.expectEqual(@as(usize, 3), query.patterns().len);
+    try std.testing.expectEqual(@as(usize, 8), query.patterns().len);
 }

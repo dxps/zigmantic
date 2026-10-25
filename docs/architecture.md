@@ -238,6 +238,12 @@ optional normalized language tag. Native numeric and boolean syntax is lowered t
 corresponding XSD datatype immediately. Anonymous identities occupy a separate union
 variant, preventing generated nodes from colliding with legal source labels.
 
+Predicate/object-list shorthand and graph-node sugar are normalized while parsing.
+Blank-node property lists emit triples around a query-local anonymous identity, and RDF
+collections emit `rdf:first`/`rdf:rest` chains ending at `rdf:nil`. Nested expansions
+therefore reach algebra as ordinary BGP triples; no serializer-oriented syntax nodes or
+special collection operators leak into evaluation.
+
 SPARQL query grammar progress is measured against the pinned W3C SPARQL 1.1
 query-syntax manifest. The runner executes every manifest entry and keeps an exact
 test-ID baseline for unsupported positive syntax, so new grammar support removes named

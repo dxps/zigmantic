@@ -134,6 +134,12 @@ parsing. Simple, language-tagged, explicitly typed, integer, decimal, double, an
 boolean forms expose their effective datatype IRIs directly. Predicate `a` is stored as
 the resolved `rdf:type` IRI.
 
+Predicate lists (`;`) and object lists (`,`) append ordinary `TriplePattern` values.
+Blank-node property lists and RDF collections are likewise expanded during parsing;
+collections use query-local anonymous nodes plus resolved `rdf:first`, `rdf:rest`, and
+`rdf:nil` IRIs. Consequently, `Query.patterns` and `Query.lower` expose the expanded BGP
+rather than surface-syntax shorthand.
+
 `Query.projection` and `Query.patterns` return borrowed slices. `Query.lower` produces
 an allocation-free `Project(BGP)` algebra view over the same storage. These views remain
 valid only while the query is alive and structurally unchanged. A `Query` must not be

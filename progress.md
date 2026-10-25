@@ -183,7 +183,7 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 118 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 121 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -199,13 +199,13 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 7 — SPARQL 1.1 query: in progress; tokenizer, ownership, parser, and algebra
   foundations are implemented for SELECT projection over basic variable/IRI patterns;
   BASE/PREFIX prologues, relative IRI resolution, prefixed names, blank nodes, RDF
-  literals, and native literal forms are supported, with the official query-syntax
-  suite pinned to an exact baseline.
+  literals, native literal forms, triple shorthand, property lists, and collections are
+  supported, with the official query-syntax suite pinned to an exact baseline.
 - Milestones 8–14: not started.
 
 ## Next actions
 
-1. Add SPARQL triple shorthand, collections, and blank-node property lists.
+1. Add SPARQL property-path syntax and algebra, including paths nested in collections.
 2. Clear the corresponding official positive-syntax failures as grammar coverage grows.
 
 ## Session log
@@ -809,3 +809,20 @@ separate packages only after their APIs and release cycles become independently 
   `test_codepoint_boundaries_escaped_05`.
 - The official SPARQL baseline now passes 44/97 cases with 53 exact expected failures;
   the local suite has 118 tests and the complete build has 124 tests.
+
+### 2026-10-25 — SPARQL triple and graph-node expansion
+
+- Added predicate lists and object lists, including repeated and trailing semicolons.
+- Added empty and non-empty blank-node property lists in subject and object positions,
+  including nested lists and standalone non-empty forms.
+- Added empty and populated RDF collections with recursive graph-node items.
+- Expanded collections directly into collision-safe anonymous nodes connected by
+  `rdf:first` and `rdf:rest`, terminating at `rdf:nil`.
+- Kept shorthand lowering inside the syntax owner so the existing `Project(BGP)`
+  algebra boundary receives ordinary expanded triple patterns.
+- Added focused expansion, malformed-delimiter, trailing-comma, incomplete-node, and
+  exhaustive allocation-failure tests.
+- Retained the exact 44/97 official SPARQL syntax baseline: the official collection
+  case additionally requires property paths and remains an expected failure.
+- The local suite has 121 tests and the complete build has 127 tests; all 827 RDF
+  syntax/evaluation cases continue to pass.
