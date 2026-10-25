@@ -147,6 +147,17 @@ inverse paths, grouping,
 zero-or-more, one-or-more, zero-or-one, and negated property sets are supported. The
 lowered BGP carries the complete path and negated-property tables alongside its triples.
 
+SELECT projections may contain plain variables or parenthesized `expression AS
+?variable` items. Variable-only projections retain the `Projection.variables` form;
+mixed or expression projections use ordered `Projection.items`. `Query.expression` and
+`Query.expressionArguments` safely resolve query-local expression IDs and call ranges.
+
+The current expression AST covers RDF terms, variables, unary arithmetic/logical-not,
+multiplication/division, addition/subtraction, custom IRI calls, `datatype`, and SPARQL
+aggregate call syntax. Aggregate nodes retain DISTINCT, COUNT wildcard, and optional
+GROUP_CONCAT separator information. The lowered Project view carries the complete
+expression and argument tables.
+
 `Query.projection` and `Query.patterns` return borrowed slices. `Query.lower` produces
 an allocation-free `Project(BGP)` algebra view over the same storage. These views remain
 valid only while the query is alive and structurally unchanged. A `Query` must not be

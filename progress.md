@@ -178,12 +178,12 @@ separate packages only after their APIs and release cycles become independently 
   syntax tree, and a borrowed `Project(BGP)` algebra boundary for the first SPARQL 1.1
   query slice.
 - The official SPARQL 1.1 query-syntax manifest is pinned and vendored with all 97
-  referenced queries; the baseline passes all 32 negative cases and fourteen positive
-  cases, with the remaining 51 positive cases tracked by exact test ID.
+  referenced queries; the baseline passes all 32 negative cases and 34 positive cases,
+  with the remaining 31 positive cases tracked by exact test ID.
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 122 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 124 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -201,13 +201,14 @@ separate packages only after their APIs and release cycles become independently 
   BASE/PREFIX prologues, relative IRI resolution, prefixed names, blank nodes, RDF
   literals, native literal forms, triple shorthand, property lists, and collections are
   supported together with complete property-path syntax and a query-owned path AST,
-  with the official query-syntax suite pinned to an exact baseline.
+  plus SELECT projection expressions and aggregate call syntax; the official
+  query-syntax suite remains pinned to an exact baseline.
 - Milestones 8–14: not started.
 
 ## Next actions
 
-1. Add expression tokenization and AST foundations, then support SELECT projection
-   expressions and aliases.
+1. Add relational/logical expressions, `IN`/`NOT IN`, and expression-bearing group
+   patterns such as FILTER and BIND.
 2. Clear the corresponding official positive-syntax failures as grammar coverage grows.
 
 ## Session log
@@ -847,3 +848,24 @@ separate packages only after their APIs and release cycles become independently 
   property lists and collections.
 - The official SPARQL baseline now passes 46/97 cases with 51 exact expected failures;
   the local suite has 122 tests and the complete build has 128 tests.
+
+### 2026-10-25 — SPARQL projection expressions and aggregates
+
+- Added query-owned expression nodes for variables, IRIs, literals, wildcard aggregate
+  arguments, unary operators, binary arithmetic, and function calls.
+- Implemented unary and multiplicative/additive precedence, including operator tokens
+  adjacent to variables.
+- Added SELECT expression aliases while preserving the compact variable-only projection
+  representation for existing callers.
+- Added built-in `datatype`, custom IRI function calls, and aggregate syntax for COUNT,
+  SUM, MIN, MAX, AVG, SAMPLE, and GROUP_CONCAT.
+- Added aggregate DISTINCT, COUNT wildcard, and GROUP_CONCAT SEPARATOR support with
+  syntax-specific arity and wildcard validation.
+- Rejected duplicate projected variable names and malformed aliases, calls, aggregate
+  arguments, and separator forms.
+- Extended the borrowed Project algebra with the expression and argument tables needed
+  to resolve query-local expression IDs.
+- Cleared official `test_1` through `test_20`, covering projection expressions and every
+  aggregate syntax fixture in the pinned manifest.
+- The official SPARQL baseline now passes 66/97 cases with 31 exact expected failures;
+  the local suite has 124 tests and the complete build has 130 tests.

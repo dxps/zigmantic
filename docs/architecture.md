@@ -250,6 +250,13 @@ nodes for alternatives, sequences, inverse paths, cardinality modifiers, or nega
 property sets. The borrowed BGP algebra view carries both path nodes and negated-set
 members, making every predicate reference self-contained for later evaluation.
 
+Projection expressions use a second query-owned ID arena. Unary, binary, and call nodes
+refer to other expressions by ID; call argument ranges index a contiguous query-owned
+table. Mixed projections retain ordered variable/expression items, while variable-only
+projections preserve their compact public representation. The Project algebra view
+carries both expression nodes and argument IDs, so aliases can be evaluated without
+accessing mutable parser state.
+
 SPARQL query grammar progress is measured against the pinned W3C SPARQL 1.1
 query-syntax manifest. The runner executes every manifest entry and keeps an exact
 test-ID baseline for unsupported positive syntax, so new grammar support removes named
