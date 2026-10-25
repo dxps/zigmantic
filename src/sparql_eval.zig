@@ -538,6 +538,29 @@ pub const ExpressionEvaluator = struct {
         {
             return self.evaluateCoreBinaryCall(call, mapping);
         }
+        if (std.mem.eql(u8, call.function, "strlen") or
+            std.mem.eql(u8, call.function, "ucase") or
+            std.mem.eql(u8, call.function, "lcase") or
+            std.mem.eql(u8, call.function, "encode_for_uri"))
+        {
+            return self.evaluateStringUnaryCall(call, mapping);
+        }
+        if (std.mem.eql(u8, call.function, "contains") or
+            std.mem.eql(u8, call.function, "strstarts") or
+            std.mem.eql(u8, call.function, "strends") or
+            std.mem.eql(u8, call.function, "strbefore") or
+            std.mem.eql(u8, call.function, "strafter") or
+            std.mem.eql(u8, call.function, "strlang") or
+            std.mem.eql(u8, call.function, "strdt"))
+        {
+            return self.evaluateStringBinaryCall(call, mapping);
+        }
+        if (std.mem.eql(u8, call.function, "concat")) {
+            return self.evaluateConcat(call, mapping);
+        }
+        if (std.mem.eql(u8, call.function, "substr")) {
+            return self.evaluateSubstring(call, mapping);
+        }
         return .{ .fault = error.UnsupportedExpression };
     }
 
@@ -726,6 +749,208 @@ pub const ExpressionEvaluator = struct {
         if (!std.mem.eql(u8, literal.datatype, rdf.xsd_string)) return error.TypeError;
         return literal.lexical_form;
     }
+
+    fn evaluateStringUnaryCall(
+        self: *ExpressionEvaluator,
+        call: sparql.FunctionCall,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const arguments = self.query.expressionArguments(call.arguments) orelse
+            return .{ .fault = error.UnsupportedExpression };
+        if (arguments.len != 1) return .{ .fault = error.UnsupportedExpression };
+        const result = try self.evaluate(arguments[0], mapping);
+        const value = switch (result) {
+            .value => |item| item,
+            .fault => return result,
+        };
+        const string = self.stringLiteral(value) catch |fault| return .{ .fault = fault };
+        if (std.mem.eql(u8, call.function, "strlen")) {
+            const length = std.unicode.utf8CountCodepoints(string.lexical) catch
+                return .{ .fault = error.TypeError };
+            return self.internInteger(@intCast(length));
+        }
+        if (std.mem.eql(u8, call.function, "encode_for_uri")) {
+            const encoded = try encodeForUriAlloc(self.allocator, string.lexical);
+            defer self.allocator.free(encoded);
+            return self.internComputedLiteral(encoded, rdf.xsd_string);
+        }
+
+        const transformed = try self.allocator.dupe(u8, string.lexical);
+        defer self.allocator.free(transformed);
+        for (transformed) |*byte| {
+            byte.* = if (std.mem.eql(u8, call.function, "ucase"))
+                std.ascii.toUpper(byte.*)
+            else
+                std.ascii.toLower(byte.*);
+        }
+        return self.internStringLiteral(transformed, string.language);
+    }
+
+    fn evaluateStringBinaryCall(
+        self: *ExpressionEvaluator,
+        call: sparql.FunctionCall,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const arguments = self.query.expressionArguments(call.arguments) orelse
+            return .{ .fault = error.UnsupportedExpression };
+        if (arguments.len != 2) return .{ .fault = error.UnsupportedExpression };
+        const left_result = try self.evaluate(arguments[0], mapping);
+        const left_id = switch (left_result) {
+            .value => |value| value,
+            .fault => return left_result,
+        };
+        const right_result = try self.evaluate(arguments[1], mapping);
+        const right_id = switch (right_result) {
+            .value => |value| value,
+            .fault => return right_result,
+        };
+
+        if (std.mem.eql(u8, call.function, "strlang")) {
+            const lexical = self.simpleString(left_id) catch |fault| return .{ .fault = fault };
+            const language = self.simpleString(right_id) catch |fault| return .{ .fault = fault };
+            const id = self.terms.internLanguageLiteral(lexical, language) catch |err| return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                else => .{ .fault = error.TypeError },
+            };
+            return .{ .value = id };
+        }
+        if (std.mem.eql(u8, call.function, "strdt")) {
+            const lexical = self.simpleString(left_id) catch |fault| return .{ .fault = fault };
+            const datatype = switch (self.terms.view(right_id) orelse
+                return .{ .fault = error.UnknownTerm }) {
+                .named_node => |iri| iri,
+                else => return .{ .fault = error.TypeError },
+            };
+            return self.internComputedLiteral(lexical, datatype);
+        }
+
+        const left = self.stringLiteral(left_id) catch |fault| return .{ .fault = fault };
+        const right = self.stringLiteral(right_id) catch |fault| return .{ .fault = fault };
+        if (!stringArgumentsCompatible(left, right)) return .{ .fault = error.TypeError };
+        if (std.mem.eql(u8, call.function, "contains")) {
+            return self.internBoolean(std.mem.indexOf(u8, left.lexical, right.lexical) != null);
+        }
+        if (std.mem.eql(u8, call.function, "strstarts")) {
+            return self.internBoolean(std.mem.startsWith(u8, left.lexical, right.lexical));
+        }
+        if (std.mem.eql(u8, call.function, "strends")) {
+            return self.internBoolean(std.mem.endsWith(u8, left.lexical, right.lexical));
+        }
+        const position = std.mem.indexOf(u8, left.lexical, right.lexical);
+        if (std.mem.eql(u8, call.function, "strbefore")) {
+            return self.internStringLiteral(
+                if (position) |index| left.lexical[0..index] else "",
+                left.language,
+            );
+        }
+        if (std.mem.eql(u8, call.function, "strafter")) {
+            return self.internStringLiteral(
+                if (position) |index| left.lexical[index + right.lexical.len ..] else "",
+                left.language,
+            );
+        }
+        return .{ .fault = error.UnsupportedExpression };
+    }
+
+    fn evaluateConcat(
+        self: *ExpressionEvaluator,
+        call: sparql.FunctionCall,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const arguments = self.query.expressionArguments(call.arguments) orelse
+            return .{ .fault = error.UnsupportedExpression };
+        var joined: std.ArrayList(u8) = .empty;
+        defer joined.deinit(self.allocator);
+        var common_language: ?[]const u8 = null;
+        var all_same_language = arguments.len != 0;
+        for (arguments, 0..) |argument, index| {
+            const result = try self.evaluate(argument, mapping);
+            const value = switch (result) {
+                .value => |item| item,
+                .fault => return result,
+            };
+            const string = self.stringLiteral(value) catch |fault| return .{ .fault = fault };
+            try joined.appendSlice(self.allocator, string.lexical);
+            if (index == 0) {
+                common_language = string.language;
+            } else if (!optionalStringEql(common_language, string.language)) {
+                all_same_language = false;
+            }
+            if (string.language == null) all_same_language = false;
+        }
+        return self.internStringLiteral(
+            joined.items,
+            if (all_same_language) common_language else null,
+        );
+    }
+
+    fn evaluateSubstring(
+        self: *ExpressionEvaluator,
+        call: sparql.FunctionCall,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const arguments = self.query.expressionArguments(call.arguments) orelse
+            return .{ .fault = error.UnsupportedExpression };
+        if (arguments.len != 2 and arguments.len != 3) {
+            return .{ .fault = error.UnsupportedExpression };
+        }
+        const string_result = try self.evaluate(arguments[0], mapping);
+        const string_id = switch (string_result) {
+            .value => |value| value,
+            .fault => return string_result,
+        };
+        const string = self.stringLiteral(string_id) catch |fault| return .{ .fault = fault };
+        const start = (try self.evaluateNumericArgument(arguments[1], mapping)) orelse
+            return .{ .fault = error.TypeError };
+        const length = if (arguments.len == 3)
+            (try self.evaluateNumericArgument(arguments[2], mapping)) orelse
+                return .{ .fault = error.TypeError }
+        else
+            null;
+        const slice = utf8Substring(string.lexical, start, length) catch
+            return .{ .fault = error.TypeError };
+        return self.internStringLiteral(slice, string.language);
+    }
+
+    fn evaluateNumericArgument(
+        self: *ExpressionEvaluator,
+        expression_id: sparql.ExpressionId,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!?f64 {
+        const result = try self.evaluate(expression_id, mapping);
+        const value = switch (result) {
+            .value => |item| item,
+            .fault => return null,
+        };
+        const numeric = self.numericValue(value) catch return null;
+        return numericAsF64(numeric);
+    }
+
+    fn stringLiteral(self: *const ExpressionEvaluator, value: rdf.TermId) ExpressionFault!StringValue {
+        const view = self.terms.view(value) orelse return error.UnknownTerm;
+        const literal = switch (view) {
+            .literal => |item| item,
+            else => return error.TypeError,
+        };
+        if (!std.mem.eql(u8, literal.datatype, rdf.xsd_string) and
+            !std.mem.eql(u8, literal.datatype, rdf.rdf_lang_string)) return error.TypeError;
+        return .{ .lexical = literal.lexical_form, .language = literal.language };
+    }
+
+    fn internStringLiteral(
+        self: *ExpressionEvaluator,
+        lexical: []const u8,
+        language: ?[]const u8,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        if (language) |tag| {
+            const id = self.terms.internLanguageLiteral(lexical, tag) catch |err| return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                else => .{ .fault = error.TypeError },
+            };
+            return .{ .value = id };
+        }
+        return self.internComputedLiteral(lexical, rdf.xsd_string);
+    }
 };
 
 const BooleanResult = union(enum) {
@@ -738,6 +963,11 @@ const NumericValue = union(enum) {
     decimal: f64,
     float32: f32,
     double: f64,
+};
+
+const StringValue = struct {
+    lexical: []const u8,
+    language: ?[]const u8,
 };
 
 fn numericAsF64(value: NumericValue) f64 {
@@ -849,6 +1079,49 @@ fn languageMatches(language: []const u8, range: []const u8) bool {
     if (std.ascii.eqlIgnoreCase(language, range)) return true;
     return language.len > range.len and language[range.len] == '-' and
         std.ascii.eqlIgnoreCase(language[0..range.len], range);
+}
+
+fn stringArgumentsCompatible(left: StringValue, right: StringValue) bool {
+    return right.language == null or
+        (left.language != null and optionalStringEql(left.language, right.language));
+}
+
+fn encodeForUriAlloc(allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]u8 {
+    const hex = "0123456789ABCDEF";
+    var encoded: std.ArrayList(u8) = .empty;
+    errdefer encoded.deinit(allocator);
+    for (input) |byte| {
+        if (std.ascii.isAlphanumeric(byte) or byte == '-' or byte == '.' or byte == '_' or byte == '~') {
+            try encoded.append(allocator, byte);
+        } else {
+            try encoded.appendSlice(allocator, &.{ '%', hex[byte >> 4], hex[byte & 0x0f] });
+        }
+    }
+    return encoded.toOwnedSlice(allocator);
+}
+
+fn utf8Substring(input: []const u8, start_value: f64, length_value: ?f64) ![]const u8 {
+    if (std.math.isNan(start_value) or
+        (length_value != null and std.math.isNan(length_value.?))) return error.InvalidSubstring;
+    const start = @floor(start_value + 0.5);
+    const end = if (length_value) |length| start + @floor(length + 0.5) else std.math.inf(f64);
+    if (end <= 1 or end <= start) return input[0..0];
+
+    var byte_index: usize = 0;
+    var position: f64 = 1;
+    var first: ?usize = null;
+    var last: usize = 0;
+    while (byte_index < input.len) : (position += 1) {
+        const width = std.unicode.utf8ByteSequenceLength(input[byte_index]) catch
+            return error.InvalidSubstring;
+        const next = byte_index + width;
+        if (position >= start and position < end) {
+            if (first == null) first = byte_index;
+            last = next;
+        }
+        byte_index = next;
+    }
+    return if (first) |index| input[index..last] else input[0..0];
 }
 
 fn parseNumericFloat(lexical: []const u8) ?f64 {
@@ -1568,6 +1841,107 @@ test "evaluates numeric scalar built-ins and their type faults" {
     );
 }
 
+test "evaluates Unicode-aware string length substring concatenation and URI encoding" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "SELECT (STRLEN('Aé猫') AS ?length) (SUBSTR('Aé猫Z', 2, 2) AS ?substring) " ++
+            "(CONCAT('a', 'b', 'c') AS ?concat) (UCASE('Abé') AS ?upper) " ++
+            "(ENCODE_FOR_URI('A é') AS ?encoded) {}",
+    );
+    defer query.deinit();
+    var no_bindings = [_]SolutionBinding{};
+    const mapping = SolutionMapping{ .bindings = no_bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+    const projection = query.projection().items;
+    const expected = [_][]const u8{ "3", "é猫", "abc", "ABé", "A%20%C3%A9" };
+    for (projection, expected) |item, lexical| {
+        const result = (try evaluator.evaluate(item.expression.expression, mapping)).value;
+        try std.testing.expectEqualStrings(lexical, evaluator.terms.view(result).?.literal.lexical_form);
+    }
+}
+
+test "preserves language tags through compatible string operations" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    const label = try source.internLanguageLiteral("hello-world", "en");
+    const french = try source.internLanguageLiteral("monde", "fr");
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "SELECT (CONTAINS(?label, 'world') AS ?contains) " ++
+            "(STRSTARTS(?label, 'hello') AS ?starts) (STRENDS(?label, 'world') AS ?ends) " ++
+            "(STRBEFORE(?label, '-') AS ?before) (STRAFTER(?label, '-') AS ?after) " ++
+            "(CONCAT(?label, ?label) AS ?same_language) " ++
+            "(CONCAT(?label, ' plain') AS ?mixed) (CONTAINS(?label, ?french) AS ?invalid) {}",
+    );
+    defer query.deinit();
+    var bindings = [_]SolutionBinding{
+        .{ .variable = "label", .value = label },
+        .{ .variable = "french", .value = french },
+    };
+    const mapping = SolutionMapping{ .bindings = bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+    const projection = query.projection().items;
+    for (projection[0..3]) |item| {
+        const result = (try evaluator.evaluate(item.expression.expression, mapping)).value;
+        try std.testing.expect(try evaluator.effectiveBooleanValue(result));
+    }
+    const before = evaluator.terms.view(
+        (try evaluator.evaluate(projection[3].expression.expression, mapping)).value,
+    ).?.literal;
+    const after = evaluator.terms.view(
+        (try evaluator.evaluate(projection[4].expression.expression, mapping)).value,
+    ).?.literal;
+    const same = evaluator.terms.view(
+        (try evaluator.evaluate(projection[5].expression.expression, mapping)).value,
+    ).?.literal;
+    const mixed = evaluator.terms.view(
+        (try evaluator.evaluate(projection[6].expression.expression, mapping)).value,
+    ).?.literal;
+    try std.testing.expectEqualStrings("hello", before.lexical_form);
+    try std.testing.expectEqualStrings("world", after.lexical_form);
+    try std.testing.expectEqualStrings("en", before.language.?);
+    try std.testing.expectEqualStrings("en", after.language.?);
+    try std.testing.expectEqualStrings("en", same.language.?);
+    try std.testing.expectEqual(@as(?[]const u8, null), mixed.language);
+    try std.testing.expectEqual(
+        error.TypeError,
+        (try evaluator.evaluate(projection[7].expression.expression, mapping)).fault,
+    );
+}
+
+test "constructs language-tagged and datatype literals" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "SELECT (STRLANG('salut', 'RO') AS ?language) " ++
+            "(STRDT('3', <http://www.w3.org/2001/XMLSchema#integer>) AS ?typed) " ++
+            "(STRLANG('bad', 'en--US') AS ?invalid) {}",
+    );
+    defer query.deinit();
+    var no_bindings = [_]SolutionBinding{};
+    const mapping = SolutionMapping{ .bindings = no_bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+    const projection = query.projection().items;
+    const language = evaluator.terms.view(
+        (try evaluator.evaluate(projection[0].expression.expression, mapping)).value,
+    ).?.literal;
+    const typed = evaluator.terms.view(
+        (try evaluator.evaluate(projection[1].expression.expression, mapping)).value,
+    ).?.literal;
+    try std.testing.expectEqualStrings("ro", language.language.?);
+    try std.testing.expectEqualStrings(rdf.xsd_integer, typed.datatype);
+    try std.testing.expectEqual(
+        error.TypeError,
+        (try evaluator.evaluate(projection[2].expression.expression, mapping)).fault,
+    );
+}
+
 test "expression evaluation handles every allocation failure" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
@@ -1599,7 +1973,10 @@ fn expectExpressionEvaluationSucceeds(allocator: std.mem.Allocator) !void {
     var source = rdf.TermPool.init(allocator);
     defer source.deinit();
     const value = try source.internTypedLiteral("3", rdf.xsd_integer);
-    var query = try sparql.parseQuery(allocator, "SELECT (ABS(?input + 2) AS ?output) {}");
+    var query = try sparql.parseQuery(
+        allocator,
+        "SELECT (CONCAT(STR(ABS(?input + 2)), SUBSTR('value', 2)) AS ?output) {}",
+    );
     defer query.deinit();
     var bindings = [_]SolutionBinding{.{ .variable = "input", .value = value }};
     var evaluator = ExpressionEvaluator.init(allocator, &query, &source);
@@ -1607,5 +1984,5 @@ fn expectExpressionEvaluationSucceeds(allocator: std.mem.Allocator) !void {
     const expression_id = query.projection().items[0].expression.expression;
     const result = try evaluator.evaluate(expression_id, .{ .bindings = bindings[0..] });
     try std.testing.expect(result == .value);
-    try std.testing.expectEqualStrings("5", evaluator.terms.view(result.value).?.literal.lexical_form);
+    try std.testing.expectEqualStrings("5alue", evaluator.terms.view(result.value).?.literal.lexical_form);
 }

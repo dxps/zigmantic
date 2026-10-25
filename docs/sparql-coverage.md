@@ -69,11 +69,12 @@ An expression context now owns a separate result term pool, preserves semantic f
 values, and implements variables, constants, numeric arithmetic and promotion, RDF value
 comparisons, membership, SPARQL logical error propagation, BOUND, logical negation, and
 effective boolean value. Core RDF-term, language, datatype, type-test, IRI, and numeric
-scalar built-ins are implemented; string/regex, constructors, temporal, hashing,
-conditional, and nondeterministic calls remain.
+scalar built-ins are implemented. String operations and RDF literal constructors are
+also implemented except for REGEX/REPLACE and complete Unicode case mapping. Temporal,
+hashing, conditional, and nondeterministic calls remain.
 Remaining execution work includes:
 
-1. remaining scalar built-in evaluation;
+1. regex, Unicode case mapping, and remaining scalar built-in evaluation;
 2. join, left join, union, minus, filter, extend, and table operators;
 3. grouping, aggregates, having, ordering, projection, distinct/reduced, slicing, and
    trailing VALUES ordering;
@@ -91,8 +92,7 @@ Remaining execution work includes:
 
 ## Planned implementation order
 
-1. Implement string, regex, and RDF literal-constructor built-ins over the expression
-   runtime.
+1. Implement the pure-Zig regex layer needed by REGEX and REPLACE.
 2. Promote the broader parser audit into a durable conformance gate while evaluation
    manifests are activated incrementally.
 

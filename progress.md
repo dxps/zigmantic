@@ -182,8 +182,8 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 161 tests; all 827 integrated RDF syntax/evaluation cases still
-  pass, and the complete 167-test build additionally classifies all 97 pinned SPARQL
+- The local suite has 164 tests; all 827 integrated RDF syntax/evaluation cases still
+  pass, and the complete 170-test build additionally classifies all 97 pinned SPARQL
   query-syntax cases.
 
 ## Milestone status
@@ -213,7 +213,8 @@ separate packages only after their APIs and release cycles become independently 
   semantic faults, numeric arithmetic and promotion, comparisons, membership, logical
   error propagation, BOUND, logical negation, effective boolean values, and core RDF,
   language, datatype, type-test, IRI, and numeric scalar built-ins, while the remaining
-  scalar calls, algebra, and result layers are not.
+  scalar calls, algebra, and result layers are not; string functions and RDF literal
+  constructors are implemented except for regex and complete Unicode case mapping.
 - Milestones 8–14: not started.
 
 ## Milestone 7 fixed plan
@@ -230,8 +231,9 @@ remain. The fixed breakdown is:
 - 7.5.2 — expression evaluation: in progress; result-term ownership, semantic faults,
   variables, constants, numeric arithmetic, comparisons, membership, logical operators,
   BOUND, logical negation, effective boolean value, and core scalar built-ins are done;
-  string/regex, constructor, temporal, hashing, conditional, and nondeterministic calls
-  remain.
+  string operations and RDF literal constructors are also done except for regex and
+  complete Unicode case mapping; temporal, hashing, conditional, and nondeterministic
+  calls remain.
 - 7.5.3–7.5.7 — joins and optional operators; datasets and services;
   property paths; grouping/modifiers; subqueries and query forms.
 - 7.6.1–7.6.3 — result model and SELECT/ASK; JSON/XML; CSV/TSV and RDF-form integration.
@@ -242,8 +244,7 @@ work should replace or explicitly revise this list rather than silently extendin
 
 ## Next actions
 
-1. Implement string, regex, and RDF literal-constructor built-ins over the expression
-   runtime (7.5.2).
+1. Implement the pure-Zig regex layer required by REGEX and REPLACE (7.5.2).
 2. Promote broader W3C parser coverage into a durable automated gate alongside the
    evaluation manifests introduced in milestone 7.7.
 
@@ -1184,3 +1185,23 @@ work should replace or explicitly revise this list rather than silently extendin
   remain.
 - Retained the pinned 97/97 syntax gate; the local suite now has 161 tests and the
   complete build passes all 167 tests.
+
+### 2026-10-25 — SPARQL string and RDF literal built-ins
+
+- Continued milestone 7.5 step 2 with CONCAT, SUBSTR, STRLEN, UCASE, LCASE,
+  ENCODE_FOR_URI, CONTAINS, STRSTARTS, STRENDS, STRBEFORE, and STRAFTER evaluation.
+- Made STRLEN and SUBSTR operate on Unicode code-point positions instead of UTF-8 byte
+  offsets and implemented XPath-style rounding for substring positions and lengths.
+- Preserved language tags for compatible unary and binary string operations, retained a
+  common tag across same-language CONCAT arguments, and produced `xsd:string` for mixed
+  inputs.
+- Added UTF-8 byte percent encoding with the RFC 3986 unreserved set and uppercase hex.
+- Added STRLANG language validation/normalization and STRDT IRI-datatype construction.
+- Implemented ASCII case conversion while explicitly recording complete Unicode case
+  mapping as remaining work rather than claiming full UCASE/LCASE semantics.
+- Kept REGEX and REPLACE unsupported pending a pure-Zig XPath-compatible regex layer.
+- Extended allocation-failure injection through nested arithmetic, STR, SUBSTR, and
+  CONCAT result construction.
+- Kept the fixed milestone count at 20 of 31 because step 7.5.2 remains in progress.
+- Retained the pinned 97/97 syntax gate; the local suite now has 164 tests and the
+  complete build passes all 170 tests.

@@ -279,6 +279,18 @@ returns existing IRIs unchanged and resolves relative simple-string arguments ag
 the parsed query's BASE without mutating the source store. Language matching implements
 case-insensitive RFC 4647 basic filtering, including the `*` range.
 
+String evaluation includes CONCAT, SUBSTR, STRLEN, UCASE, LCASE, ENCODE_FOR_URI,
+CONTAINS, STRSTARTS, STRENDS, STRBEFORE, and STRAFTER. STRLEN and SUBSTR count Unicode
+code points rather than UTF-8 bytes, and compatible operations preserve a shared
+language tag. Mixed-language concatenation produces `xsd:string`. URI encoding operates
+on UTF-8 bytes using uppercase percent escapes. Case conversion currently covers ASCII
+case mappings and preserves non-ASCII code points unchanged; complete Unicode case
+mapping remains pending.
+
+STRLANG validates and normalizes its language tag through the RDF term pool, while
+STRDT requires an IRI datatype argument. REGEX and REPLACE remain unsupported until the
+pure-Zig XPath-compatible regex layer is implemented.
+
 `effectiveBooleanValue` implements SPARQL EBV for valid boolean and numeric literals,
 simple strings, and language-tagged strings. Zero, NaN, false, and empty strings are
 false; other supported values are true. Invalid lexical forms and RDF terms without a
