@@ -116,12 +116,15 @@ byte offsets and borrowed lexemes. `sparql.parseQuery(allocator, input)` returns
 owned query syntax tree and reports `InvalidUtf8`, `InvalidSyntax`, or `OutOfMemory`
 without exposing partially initialized state.
 
-The parser implements `SELECT`, `ASK`, and the `CONSTRUCT WHERE` shorthand. SELECT
-supports optional `DISTINCT` or `REDUCED` and wildcard, variable, or expression
-projection. Query forms accept their permitted optional `WHERE` spelling and dataset
-clauses; `DatasetClause.named` distinguishes `FROM NAMED`. Unsupported SPARQL grammar
-is rejected explicitly. Query variables are stored without their `?` or `$` sigil;
-IRI-reference terms are stored without angle brackets.
+The parser implements `SELECT`, `ASK`, `CONSTRUCT`, and `DESCRIBE`. SELECT supports
+optional `DISTINCT` or `REDUCED` and wildcard, variable, or expression projection.
+Explicit CONSTRUCT templates are exposed separately through `Query.constructTemplate`;
+the `CONSTRUCT WHERE` shorthand populates both template and WHERE-pattern views.
+DESCRIBE retains wildcard or ordered variable/IRI targets through
+`Query.describeTargets` and permits the grammar's absent WHERE clause. Query forms
+accept dataset clauses; `DatasetClause.named` distinguishes `FROM NAMED`. Query
+variables are stored without their `?` or `$` sigil, and IRI-reference terms without
+angle brackets.
 
 `BASE` and `PREFIX` declarations precede the query form. `Query.base_iri` and
 `Query.prefixDeclarations` expose borrowed query-owned prologue values. Relative IRI

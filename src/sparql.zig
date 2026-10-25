@@ -15,6 +15,7 @@ pub const TokenTag = enum {
     select,
     ask,
     construct,
+    describe,
     distinct,
     reduced,
     where,
@@ -359,6 +360,8 @@ pub const Tokenizer = struct {
             .ask
         else if (std.ascii.eqlIgnoreCase(lexeme, "CONSTRUCT"))
             .construct
+        else if (std.ascii.eqlIgnoreCase(lexeme, "DESCRIBE"))
+            .describe
         else if (std.ascii.eqlIgnoreCase(lexeme, "DISTINCT"))
             .distinct
         else if (std.ascii.eqlIgnoreCase(lexeme, "REDUCED"))
@@ -679,7 +682,12 @@ pub const ValuesBlock = struct {
     }
 };
 
-pub const QueryForm = enum { select, ask, construct };
+pub const QueryForm = enum { select, ask, construct, describe };
+
+pub const DescribeTarget = union(enum) {
+    variable: []const u8,
+    iri: []const u8,
+};
 
 pub const DatasetClause = struct {
     iri: []const u8,
@@ -718,6 +726,9 @@ pub const Query = struct {
     projection_variables: std.ArrayList([]const u8) = .empty,
     projection_items: std.ArrayList(ProjectionItem) = .empty,
     where_patterns: std.ArrayList(TriplePattern) = .empty,
+    construct_template: std.ArrayList(TriplePattern) = .empty,
+    describe_all: bool = false,
+    describe_targets: std.ArrayList(DescribeTarget) = .empty,
     groups: std.ArrayList(Group) = .empty,
     subqueries: std.ArrayList(Subquery) = .empty,
     values_blocks: std.ArrayList(ValuesBlock) = .empty,
@@ -750,6 +761,8 @@ pub const Query = struct {
         self.projection_variables.deinit(self.allocator);
         self.projection_items.deinit(self.allocator);
         self.where_patterns.deinit(self.allocator);
+        self.construct_template.deinit(self.allocator);
+        self.describe_targets.deinit(self.allocator);
         for (self.groups.items) |*group| group.elements.deinit(self.allocator);
         self.groups.deinit(self.allocator);
         for (self.subqueries.items) |nested_query| {
@@ -787,6 +800,14 @@ pub const Query = struct {
 
     pub fn patterns(self: *const Query) []const TriplePattern {
         return self.where_patterns.items;
+    }
+
+    pub fn constructTemplate(self: *const Query) []const TriplePattern {
+        return self.construct_template.items;
+    }
+
+    pub fn describeTargets(self: *const Query) []const DescribeTarget {
+        return self.describe_targets.items;
     }
 
     pub fn prefixDeclarations(self: *const Query) []const Prefix {
@@ -910,6 +931,21 @@ pub const Query = struct {
                 .expression_arguments = self.expression_arguments.items,
             } },
             .construct => .{ .construct = .{
+                .template = self.constructTemplate(),
+                .input = input,
+                .datasets = self.dataset_clauses.items,
+                .group_by = self.groupBy(),
+                .having = self.having(),
+                .order_by = self.orderBy(),
+                .limit = self.solution.limit,
+                .offset = self.solution.offset,
+                .trailing_values = self.trailingValues(),
+                .expressions = self.expressions.items,
+                .expression_arguments = self.expression_arguments.items,
+            } },
+            .describe => .{ .describe = .{
+                .all = self.describe_all,
+                .targets = self.describeTargets(),
                 .input = input,
                 .datasets = self.dataset_clauses.items,
                 .group_by = self.groupBy(),
@@ -993,6 +1029,22 @@ pub const Ask = struct {
 };
 
 pub const Construct = struct {
+    template: []const TriplePattern,
+    input: AlgebraInput,
+    datasets: []const DatasetClause,
+    group_by: []const GroupCondition,
+    having: []const ExpressionId,
+    order_by: []const OrderCondition,
+    limit: ?usize,
+    offset: ?usize,
+    trailing_values: ?ValuesBlock,
+    expressions: []const Expression,
+    expression_arguments: []const ExpressionId,
+};
+
+pub const Describe = struct {
+    all: bool,
+    targets: []const DescribeTarget,
     input: AlgebraInput,
     datasets: []const DatasetClause,
     group_by: []const GroupCondition,
@@ -1015,9 +1067,10 @@ pub const Algebra = union(enum) {
     project: Project,
     ask: Ask,
     construct: Construct,
+    describe: Describe,
 };
 
-/// Parses the implemented SPARQL 1.1 SELECT, ASK, and CONSTRUCT query slice.
+/// Parses the implemented SPARQL 1.1 SELECT, ASK, CONSTRUCT, and DESCRIBE query slice.
 pub fn parseQuery(allocator: std.mem.Allocator, input: []const u8) ParseError!Query {
     var parser = Parser{
         .allocator = allocator,
@@ -1030,6 +1083,8 @@ pub fn parseQuery(allocator: std.mem.Allocator, input: []const u8) ParseError!Qu
 }
 
 const Parser = struct {
+    const TripleDestination = enum { where, construct, both };
+
     const ParsedGraphNode = struct {
         term: PatternTerm,
         standalone: bool = false,
@@ -1047,6 +1102,7 @@ const Parser = struct {
     query: Query,
     lookahead: ?Token = null,
     current_group: ?GroupId = null,
+    triple_destination: TripleDestination = .where,
 
     fn parse(self: *Parser) ParseError!void {
         try self.parsePrologue();
@@ -1071,8 +1127,25 @@ const Parser = struct {
             .construct => {
                 _ = try self.take();
                 self.query.form = .construct;
+                if ((try self.peek()).tag == .left_brace) {
+                    try self.parseConstructTemplate();
+                    try self.parseDatasetClauses();
+                    try self.parseRootWhere(false);
+                } else {
+                    try self.parseDatasetClauses();
+                    try self.parseConstructWhereShortcut();
+                }
+            },
+            .describe => {
+                _ = try self.take();
+                self.query.form = .describe;
+                try self.parseDescribeTargets();
                 try self.parseDatasetClauses();
-                try self.parseRootWhere(true);
+                if ((try self.peek()).tag == .where or
+                    (try self.peek()).tag == .left_brace)
+                {
+                    try self.parseRootWhere(false);
+                }
             },
             else => return error.InvalidSyntax,
         }
@@ -1088,7 +1161,7 @@ const Parser = struct {
         )) return error.InvalidSyntax;
         if (!self.groupAliasesAreValid(
             self.query.solution.group_by,
-            self.query.root_group.?,
+            self.query.root_group,
             self.query.trailing_values,
         )) return error.InvalidSyntax;
         if (self.query.form == .select and !self.groupedProjectionIsValid(
@@ -1098,6 +1171,25 @@ const Parser = struct {
             self.query.trailing_values,
         )) return error.InvalidSyntax;
         try self.expect(.eof);
+    }
+
+    fn parseDescribeTargets(self: *Parser) ParseError!void {
+        if ((try self.peek()).tag == .star) {
+            _ = try self.take();
+            self.query.describe_all = true;
+            return;
+        }
+        while (true) {
+            const token = try self.peek();
+            const target: DescribeTarget = switch (token.tag) {
+                .variable => .{ .variable = try self.query.own((try self.take()).lexeme) },
+                .iri_reference => .{ .iri = try self.resolveIri((try self.take()).lexeme) },
+                .prefixed_name => .{ .iri = try self.expandPrefixedName((try self.take()).lexeme) },
+                else => break,
+            };
+            try self.query.describe_targets.append(self.allocator, target);
+        }
+        if (self.query.describe_targets.items.len == 0) return error.InvalidSyntax;
     }
 
     fn parseSolutionModifiers(self: *Parser) ParseError!SolutionModifiers {
@@ -1300,6 +1392,41 @@ const Parser = struct {
         self.current_group = root;
         try self.parseBasicGraphPattern();
         try self.expect(.right_brace);
+    }
+
+    fn parseConstructTemplate(self: *Parser) ParseError!void {
+        try self.expect(.left_brace);
+        const previous = self.triple_destination;
+        self.triple_destination = .construct;
+        defer self.triple_destination = previous;
+        try self.parseTemplateTriples();
+        try self.expect(.right_brace);
+    }
+
+    fn parseConstructWhereShortcut(self: *Parser) ParseError!void {
+        try self.expect(.where);
+        try self.expect(.left_brace);
+        const root = try self.addGroup();
+        self.query.root_group = root;
+        self.current_group = root;
+        const previous = self.triple_destination;
+        self.triple_destination = .both;
+        defer self.triple_destination = previous;
+        try self.parseTemplateTriples();
+        try self.expect(.right_brace);
+    }
+
+    fn parseTemplateTriples(self: *Parser) ParseError!void {
+        while ((try self.peek()).tag != .right_brace) {
+            const subject = try self.parseGraphNode();
+            if (canStartPredicate((try self.peek()).tag)) {
+                try self.parsePropertyList(subject.term, .right_brace);
+            } else if (!subject.standalone) {
+                return error.InvalidSyntax;
+            }
+            if ((try self.peek()).tag == .right_brace) return;
+            try self.expect(.dot);
+        }
     }
 
     fn parseDatasetClauses(self: *Parser) ParseError!void {
@@ -2051,13 +2178,15 @@ const Parser = struct {
     fn groupAliasesAreValid(
         self: *const Parser,
         group_by: SolutionRange,
-        group_id: GroupId,
+        group_id: ?GroupId,
         trailing_values: ?ValuesId,
     ) bool {
         const grouped = self.query.groupConditions(group_by) orelse return false;
         for (grouped) |condition| {
             const alias = condition.alias orelse continue;
-            if (self.groupContainsVariable(group_id, alias)) return false;
+            if (group_id) |id| {
+                if (self.groupContainsVariable(id, alias)) return false;
+            }
             if (trailing_values) |id| {
                 if (stringSliceContains(self.query.values_blocks.items[id].variables, alias)) {
                     return false;
@@ -2224,6 +2353,16 @@ const Parser = struct {
     }
 
     fn parsePredicate(self: *Parser) ParseError!PatternTerm {
+        if (self.triple_destination != .where) {
+            const token = try self.take();
+            return switch (token.tag) {
+                .variable => .{ .variable = try self.query.own(token.lexeme) },
+                .iri_reference => .{ .iri = try self.resolveIri(token.lexeme) },
+                .prefixed_name => .{ .iri = try self.expandPrefixedName(token.lexeme) },
+                .keyword_a => .{ .iri = rdf_mod.rdf_namespace ++ "type" },
+                else => error.InvalidSyntax,
+            };
+        }
         if ((try self.peek()).tag == .variable) {
             const token = try self.take();
             return .{ .variable = try self.query.own(token.lexeme) };
@@ -2410,9 +2549,14 @@ const Parser = struct {
     }
 
     fn appendTriple(self: *Parser, triple: TriplePattern) ParseError!void {
-        const index = self.query.where_patterns.items.len;
-        try self.query.where_patterns.append(self.allocator, triple);
-        try self.appendGroupElement(.{ .triple = index });
+        if (self.triple_destination == .where or self.triple_destination == .both) {
+            const index = self.query.where_patterns.items.len;
+            try self.query.where_patterns.append(self.allocator, triple);
+            try self.appendGroupElement(.{ .triple = index });
+        }
+        if (self.triple_destination == .construct or self.triple_destination == .both) {
+            try self.query.construct_template.append(self.allocator, triple);
+        }
     }
 
     fn addGroup(self: *Parser) ParseError!GroupId {
@@ -3526,6 +3670,53 @@ test "parses ASK and CONSTRUCT WHERE query forms with datasets" {
     try std.testing.expect(construct.datasetClauses()[1].named);
     try std.testing.expectEqualStrings("urn:named", construct.datasetClauses()[1].iri);
     try std.testing.expectEqual(@as(usize, 1), construct.lower().construct.input.bgp.triples.len);
+    try std.testing.expectEqual(@as(usize, 1), construct.constructTemplate().len);
+}
+
+test "separates explicit CONSTRUCT templates from WHERE patterns" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "PREFIX ex: <https://example.com/> " ++
+            "CONSTRUCT { ?s ex:copy ?o ; a ex:Thing . [ ex:q 'value' ] } " ++
+            "FROM <urn:source> WHERE { ?s ex:source ?o } LIMIT 4",
+    );
+    defer query.deinit();
+
+    try std.testing.expectEqual(QueryForm.construct, query.form);
+    try std.testing.expectEqual(@as(usize, 3), query.constructTemplate().len);
+    try std.testing.expectEqual(@as(usize, 1), query.patterns().len);
+    try std.testing.expectEqualStrings(
+        "https://example.com/copy",
+        query.constructTemplate()[0].predicate.iri,
+    );
+    try std.testing.expectEqual(@as(?usize, 4), query.lower().construct.limit);
+    try std.testing.expectEqual(@as(usize, 3), query.lower().construct.template.len);
+}
+
+test "parses DESCRIBE targets wildcard and optional WHERE" {
+    var targeted = try parseQuery(
+        std.testing.allocator,
+        "PREFIX ex: <https://example.com/> " ++
+            "DESCRIBE ?resource ex:fixed FROM NAMED ex:graph " ++
+            "WHERE { ?resource ex:p ?o } ORDER BY ?resource LIMIT 5",
+    );
+    defer targeted.deinit();
+
+    try std.testing.expectEqual(QueryForm.describe, targeted.form);
+    try std.testing.expect(!targeted.describe_all);
+    try std.testing.expectEqual(@as(usize, 2), targeted.describeTargets().len);
+    try std.testing.expectEqualStrings("resource", targeted.describeTargets()[0].variable);
+    try std.testing.expectEqualStrings(
+        "https://example.com/fixed",
+        targeted.describeTargets()[1].iri,
+    );
+    try std.testing.expectEqual(@as(usize, 1), targeted.lower().describe.order_by.len);
+
+    var wildcard = try parseQuery(std.testing.allocator, "DESCRIBE * LIMIT 1");
+    defer wildcard.deinit();
+    try std.testing.expect(wildcard.describe_all);
+    try std.testing.expectEqual(@as(usize, 0), wildcard.describeTargets().len);
+    try std.testing.expectEqual(@as(usize, 0), wildcard.lower().describe.input.bgp.elements.len);
 }
 
 test "preserves SELECT subqueries with independent projection scope" {
@@ -3666,7 +3857,9 @@ test "rejects malformed or unsupported query syntax" {
         "SELECT (CONTAINS(?x, 'a', 'b') AS ?value) {}",           "SELECT (CONCAT(DISTINCT ?x) AS ?value) {}",                          "SELECT (NOW(1) AS ?value) {}",
         "SELECT (YEAR() AS ?value) {}",                           "SELECT (YEAR(?x, ?y) AS ?value) {}",                                 "SELECT (IF(?x, ?y) AS ?value) {}",
         "SELECT (IF(?w, ?x, ?y, ?z) AS ?value) {}",               "SELECT (SHA256(?x, ?y) AS ?value) {}",                               "SELECT (COALESCE(DISTINCT ?x) AS ?value) {}",
-        "SELECT (COALESCE(*) AS ?value) {}",
+        "SELECT (COALESCE(*) AS ?value) {}",                      "DESCRIBE WHERE { ?s ?p ?o }",                                        "DESCRIBE (?s) WHERE { ?s ?p ?o }",
+        "DESCRIBE * ?s WHERE { ?s ?p ?o }",                       "CONSTRUCT { ?s <urn:p>/<urn:q> ?o } WHERE { ?s ?p ?o }",             "CONSTRUCT WHERE { FILTER(true) }",
+        "CONSTRUCT { GRAPH <urn:g> { ?s ?p ?o } } WHERE {}",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -3698,8 +3891,26 @@ test "query parsing handles every allocation failure" {
     });
 }
 
+test "CONSTRUCT and DESCRIBE parsing handle every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, expectAnyQueryParses, .{
+        "PREFIX ex: <https://example.com/> " ++
+            "CONSTRUCT { ?s ex:copy ?o . [ ex:q 'value' ] } " ++
+            "FROM ex:source WHERE { ?s ex:p ?o } ORDER BY ?s LIMIT 2",
+    });
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, expectAnyQueryParses, .{
+        "PREFIX ex: <https://example.com/> " ++
+            "DESCRIBE ?resource ex:fixed FROM NAMED ex:graph " ++
+            "WHERE { ?resource ex:p ?o } ORDER BY ?resource LIMIT 2",
+    });
+}
+
 fn expectQueryParses(allocator: std.mem.Allocator, input: []const u8) !void {
     var query = try parseQuery(allocator, input);
     defer query.deinit();
     try std.testing.expectEqual(@as(usize, 14), query.patterns().len);
+}
+
+fn expectAnyQueryParses(allocator: std.mem.Allocator, input: []const u8) !void {
+    var query = try parseQuery(allocator, input);
+    defer query.deinit();
 }

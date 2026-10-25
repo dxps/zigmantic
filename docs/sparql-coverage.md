@@ -14,8 +14,8 @@ claim that every grammar production or its evaluation semantics is implemented.
 | Prologue and dataset clauses | Implemented | Retain coverage while adding query forms. |
 | SELECT and subqueries | Partial | Add remaining graph patterns, expressions, and evaluation. |
 | ASK | Syntax foundation | Add evaluation and result production. |
-| CONSTRUCT | Partial | Add explicit construct templates; restrict and represent the `CONSTRUCT WHERE` template correctly. |
-| DESCRIBE | Missing | Add targets, optional WHERE, lowering, and result semantics. |
+| CONSTRUCT | Syntax foundation | Add template instantiation and RDF graph results. |
+| DESCRIBE | Syntax foundation | Define resource-description and result semantics. |
 | GROUP BY | Syntax implemented | Add grouping and alias evaluation. |
 | HAVING | Syntax foundation | Add constraint evaluation after grouping. |
 | ORDER BY | Syntax foundation | Add SPARQL ordering and expression-error semantics. |
@@ -81,8 +81,7 @@ section 18. Evaluation is not implemented. Remaining execution work includes:
 
 ## Planned implementation order
 
-1. Add DESCRIBE and explicit CONSTRUCT templates.
-2. Close remaining syntax gaps and run differential parser checks.
-3. Freeze the first evaluation-ready AST/algebra boundary, then implement solution
+1. Close remaining syntax gaps and run differential parser checks.
+2. Freeze the first evaluation-ready AST/algebra boundary, then implement solution
    mappings and BGP evaluation over the indexed store.
 

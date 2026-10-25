@@ -218,7 +218,7 @@ run in the ordinary suite; Zig's fuzz runner can mutate the same structured inpu
 The `sparql` module separates three layers from its first parser slice. `Tokenizer`
 borrows input and emits positioned tokens without allocation. `Query` owns copied
 syntax values and releases them through an explicit allocator. `Algebra` is initially a
-borrowed view that lowers SELECT, ASK, and CONSTRUCT WHERE syntax to form-specific
+borrowed view that lowers SELECT, ASK, CONSTRUCT, and DESCRIBE syntax to form-specific
 operators over a shared BGP without another allocation.
 
 The initial grammar slice accepts SELECT projections and basic graph patterns made from
@@ -278,10 +278,13 @@ caller-provided interface so applications retain control over networking, creden
 timeouts, and policy.
 
 SELECT subqueries reuse the expression and group arenas but own independent projection
-slices, preserving projection scope while keeping every ID query-local. ASK and the
-CONSTRUCT WHERE shorthand reuse the same root-group representation. Top-level FROM and
-FROM NAMED clauses are retained as resolved, ordered dataset declarations and borrowed
-by each form-specific algebra view.
+slices, preserving projection scope while keeping every ID query-local. ASK, CONSTRUCT,
+and DESCRIBE reuse the same optional root-group representation. Explicit CONSTRUCT
+templates occupy a triple arena separate from WHERE patterns; the shorthand appends
+each parsed triple to both arenas. DESCRIBE targets use a dedicated variable/IRI union,
+including a distinct wildcard state. Top-level FROM and FROM NAMED clauses are retained
+as resolved, ordered dataset declarations and borrowed by each form-specific algebra
+view.
 
 Solution modifiers use query-owned contiguous arenas. GROUP BY entries reference the
 shared expression arena and retain optional aliases; HAVING stores constraint IDs and

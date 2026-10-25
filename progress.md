@@ -182,7 +182,7 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 138 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 141 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -202,22 +202,21 @@ separate packages only after their APIs and release cycles become independently 
   supported together with complete property-path syntax and a query-owned path AST,
   plus SELECT projection expressions, aggregate calls, relational/logical expressions,
   FILTER, BIND, nested groups, OPTIONAL, UNION, MINUS, EXISTS/NOT EXISTS, SELECT
-  subqueries, ASK, CONSTRUCT WHERE, dataset clauses, GROUP BY aliases, HAVING, ORDER BY,
-  LIMIT/OFFSET, inline/trailing VALUES, GRAPH, and SERVICE/SERVICE SILENT; all 97 cases
-  in the pinned query-syntax manifest pass; every SPARQL 1.1 built-in call has a strict
-  syntax signature, while remaining query forms and evaluation are incomplete.
+  subqueries, ASK, both CONSTRUCT forms, DESCRIBE, dataset clauses, GROUP BY aliases,
+  HAVING, ORDER BY, LIMIT/OFFSET, inline/trailing VALUES, GRAPH, and SERVICE/SERVICE
+  SILENT; all 97 cases in the pinned query-syntax manifest pass; every SPARQL 1.1
+  built-in call has a strict syntax signature, while evaluation remains incomplete.
 - Milestones 8–14: not started.
 
 ## Milestone 7 fixed plan
 
-Milestone 7 contains 31 tracked increments. After step 7.4.11, 17 are complete and 14
+Milestone 7 contains 31 tracked increments. After step 7.4.12, 18 are complete and 13
 remain. The fixed breakdown is:
 
 - 7.1 — parser/algebra foundation: complete.
 - 7.2 — pinned W3C syntax baseline: complete.
 - 7.3.1–7.3.4 — terms, graph nodes, shorthand, and property paths: complete.
-- 7.4.1–7.4.11 — complete SPARQL built-in expression syntax: complete.
-- 7.4.12 — DESCRIBE and explicit CONSTRUCT templates.
+- 7.4.1–7.4.12 — expression syntax and all four query forms: complete.
 - 7.4.13 — syntax closure, differential checks, and parser hardening.
 - 7.5.1–7.5.7 — solution mappings/BGP; expressions; joins and optional operators;
   datasets and services; property paths; grouping/modifiers; subqueries and query forms.
@@ -229,9 +228,8 @@ work should replace or explicitly revise this list rather than silently extendin
 
 ## Next actions
 
-1. Add DESCRIBE and explicit CONSTRUCT templates (7.4.12).
-2. Close remaining syntax gaps and harden the parser (7.4.13).
-3. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
+1. Close remaining syntax gaps and harden the parser (7.4.13).
+2. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
    store.
 
 ## Session log
@@ -1050,3 +1048,19 @@ work should replace or explicitly revise this list rather than silently extendin
 - Advanced the fixed milestone plan to 17 of 31 increments complete, with 14 remaining.
 - Retained the 97/97 W3C query-syntax baseline; the local suite now has 138 tests and
   the complete build passes all 144 tests.
+
+### 2026-10-25 — SPARQL DESCRIBE and CONSTRUCT templates
+
+- Added DESCRIBE wildcard and ordered variable/IRI targets, including queries without a
+  WHERE clause and form-specific borrowed algebra views.
+- Added explicit CONSTRUCT templates with their own triple arena, shorthand expansion,
+  blank-node allocation, and template-safe predicate grammar.
+- Changed CONSTRUCT WHERE shorthand to populate both the template and WHERE-pattern
+  arenas while rejecting graph-pattern operators and property paths in template syntax.
+- Extended the Construct algebra view with its borrowed template and added a dedicated
+  Describe view with targets and wildcard state.
+- Added query-form shape, template separation, shorthand equivalence, malformed syntax,
+  and exhaustive allocation-failure coverage for both forms.
+- Advanced the fixed milestone plan to 18 of 31 increments complete, with 13 remaining.
+- Retained the 97/97 W3C query-syntax baseline; the local suite now has 141 tests and
+  the complete build passes all 147 tests.
