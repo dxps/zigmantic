@@ -12,6 +12,8 @@
   slices that the caller frees with the allocator passed to the function.
 - `rdf_io.serializeTurtleAlloc` and `rdf_io.serializeTriGAlloc` likewise return
   allocator-owned byte slices.
+- `sparql.parseQuery` returns an allocator-owned `sparql.Query`; its algebra view borrows
+  the query and must not outlive it.
 - Term views are borrowed and remain valid until their pool is deinitialized. Statement
   slices remain valid only while their container remains structurally unchanged.
 
@@ -106,6 +108,24 @@ deliberately favors stable output over grouping adjacent quads or inventing pref
 Output follows dataset iteration order. The serializer does not sort quads, relabel
 blank nodes, or promise byte-identical output for isomorphic datasets built with
 different ordering or blank-node identifiers.
+
+## SPARQL query foundation
+
+`sparql.Tokenizer` borrows a UTF-8 query string and returns allocation-free tokens with
+byte offsets and borrowed lexemes. `sparql.parseQuery(allocator, input)` returns an
+owned query syntax tree and reports `InvalidUtf8`, `InvalidSyntax`, or `OutOfMemory`
+without exposing partially initialized state.
+
+The initial parser slice implements `SELECT`, optional `DISTINCT` or `REDUCED`, wildcard
+or variable projection, optional `WHERE`, and a basic graph pattern whose terms are
+variables or IRI references. Unsupported SPARQL grammar is rejected explicitly. Query
+variables are stored without their `?` or `$` sigil; IRI-reference terms are stored
+without angle brackets.
+
+`Query.projection` and `Query.patterns` return borrowed slices. `Query.lower` produces
+an allocation-free `Project(BGP)` algebra view over the same storage. These views remain
+valid only while the query is alive and structurally unchanged. A `Query` must not be
+copied after initialization and must be released with `deinit`.
 
 ## Indexed store
 

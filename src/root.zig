@@ -5,6 +5,7 @@ pub const rdf = @import("rdf.zig");
 pub const rdf_io = @import("rdf_io.zig");
 pub const store = @import("store.zig");
 pub const entailment = @import("entailment.zig");
+pub const sparql = @import("sparql.zig");
 
 test {
     _ = iri;
@@ -12,4 +13,5 @@ test {
     _ = rdf_io;
     _ = store;
     _ = entailment;
+    _ = sparql;
 }

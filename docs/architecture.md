@@ -170,19 +170,26 @@ and `rdfs7` consequences. Its additions are independently transactional and idem
 The general RDFS layer adds the 38 finite non-container axiomatic triples plus the two
 mandatory datatype-class facts, then evaluates `rdfs1` through `rdfs13` against stable
 per-round snapshots until no triple is added. All additions share one transaction, so an
-allocation failure rolls the layer back. Conclusions that require generalized RDF
-intermediates are intentionally skipped because the core graph type enforces ordinary
-RDF subject and predicate positions. Datatype value interpretation and inconsistency
-detection for optional recognized datatype IRIs remain separate concerns.
+allocation failure rolls the layer back. Public materializations remain legal RDF and
+therefore never expose literals as subjects or blank nodes as predicates.
+
+Entailment creates a separate generalized closure from that materialization. This
+private set admits the temporary generalized triples required by RDF 1.1 Semantics and
+applies `GrdfD1`, `rdfD2`, and `rdfs1` through `rdfs13` to exhaustion. Existential
+matching runs over the resulting closure, which provides completeness without weakening
+the invariants of `Graph`, `Store`, or their iterators.
 
 Mandatory datatype consistency is a read-only check over the materialized union. It
 recognizes only `xsd:string` and `rdf:langString`, whose value spaces are fixed and
-disjoint, and evaluates applicable RDFS range constraints directly so it does not need
-illegal generalized triples with literal subjects. Optional XSD and RDF datatype IRIs
-are not treated as recognized until enabled in a `DatatypeProfile`. The initial optional
-layer supports arbitrary-size `xsd:integer` lexical forms, bounded `xsd:int` values, and
-safe detection of incomplete `rdf:XMLLiteral` markup. XMLLiteral validation remains
-deliberately partial until a complete XML parser is available.
+disjoint. A second pass over the generalized closure detects incompatible datatype
+memberships on IRIs, blank nodes, and literal values, including memberships inferred
+through generalized predicates. Optional XSD and RDF datatype IRIs are not treated as
+recognized until enabled in a `DatatypeProfile`.
+
+The optional layer supports arbitrary-size `xsd:integer`, bounded `xsd:int`, exact
+decimal comparison, IEEE-754 `xsd:float` and `xsd:double`, and `rdf:XMLLiteral` lexical
+validation. XML literal validation uses a pure Zig XML 1.0 content parser and enforces
+self-contained XML Namespaces 1.0 bindings.
 
 Recognized literal equality is value-based rather than lexical. Integer and decimal
 forms are normalized as sign plus trimmed integral and fractional digits without
@@ -190,12 +197,6 @@ allocation. Float and double forms are parsed at their declared IEEE-754 widths 
 comparison, preserving their specified rounding, infinities, NaN equality, and signed
 zero distinction. Unknown datatype IRIs fall back to ordinary RDF term equality rather
 than acquiring unsupported semantics.
-
-The library entailment matcher represents `rdfD1` consequences virtually. When a
-conclusion blank node is mapped to a recognized literal value, a matching
-`rdf:type datatype` fact is available to the matcher without being inserted into the
-materialization. This preserves completeness for the tested existential conclusion
-while keeping literal subjects out of `Graph`, `Store`, and their public iterators.
 
 Plain RDF composition also instantiates target-aware `rdf:_n rdf:type rdf:Property`
 axioms. RDFS composition uses the richer container layer before applying its general
@@ -206,3 +207,21 @@ Allocation-failure injection independently exercises simple entailment, RDF clos
 datatype matching, RDFS fixed-point closure, and consistency checking. The regimes are
 tested separately so allocation counts remain deterministic while every public path and
 owned temporary structure is covered.
+
+Native Zig fuzz targets generate compact simple and RDFS entailment cases. They check
+blank-node renaming, monotonicity under premise extension, generalized subproperty
+chains, closure idempotence, and asserted-provenance preservation. Fixed seed corpora
+run in the ordinary suite; Zig's fuzz runner can mutate the same structured inputs.
+
+## SPARQL boundary
+
+The `sparql` module separates three layers from its first parser slice. `Tokenizer`
+borrows input and emits positioned tokens without allocation. `Query` owns copied
+syntax values and releases them through an explicit allocator. `Algebra` is initially a
+borrowed view that lowers a SELECT query to `Project(BGP)` without another allocation.
+
+The initial grammar slice accepts SELECT projections and basic graph patterns made from
+variables and IRI references. Keeping unsupported grammar as an explicit syntax error
+prevents partial constructs from acquiring accidental semantics. Future grammar work
+extends the syntax owner and algebra variants while preserving tokenizer positions,
+query ownership, and the parse/lower boundary.

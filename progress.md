@@ -174,10 +174,13 @@ separate packages only after their APIs and release cycles become independently 
 - Native Zig fuzz targets exercise simple-entailment mapping and RDFS closure with
   seeded corpora and check monotonicity, blank-node renaming, closure idempotence, and
   asserted-provenance preservation.
+- The public `sparql` module establishes allocation-free tokenization, an owned SELECT
+  syntax tree, and a borrowed `Project(BGP)` algebra boundary for the first SPARQL 1.1
+  query slice.
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 107 tests; all 827 integrated syntax/evaluation cases still pass.
+- The local suite has 113 tests; all 827 integrated syntax/evaluation cases still pass.
 
 ## Milestone status
 
@@ -189,13 +192,15 @@ separate packages only after their APIs and release cycles become independently 
 - Milestone 6 — RDF/RDFS semantics and entailment: complete for the RDF 1.1 required
   datatype set; optional recognized-datatype profiles cover only the datatypes explicitly
   exposed by `DatatypeProfile`.
-- Milestones 7–14: not started.
+- Milestone 7 — SPARQL 1.1 query: in progress; tokenizer, ownership, parser, and algebra
+  foundations are implemented for SELECT projection over basic variable/IRI patterns.
+- Milestones 8–14: not started.
 
 ## Next actions
 
-1. Begin milestone 7 with SPARQL 1.1 tokenizer, parser, and algebra boundaries.
-2. Vendor and classify the official SPARQL 1.1 query syntax tests before expanding the
+1. Vendor and classify the official SPARQL 1.1 query syntax tests before expanding the
    grammar beyond the first parser slice.
+2. Add BASE/PREFIX prologue handling and shared SPARQL RDF-term grammar.
 
 ## Session log
 
@@ -727,3 +732,22 @@ separate packages only after their APIs and release cycles become independently 
   and preservation of asserted provenance.
 - Passed all 48 model-theory cases, 827 syntax/evaluation cases, and 107 local tests;
   the complete build now runs 112 tests.
+
+### 2026-10-25 — SPARQL query foundation
+
+- Added a public `sparql` module and exported it through the package root.
+- Added an allocation-free, positioned tokenizer for SELECT keywords, modifiers,
+  variables, IRI references, group delimiters, triple separators, comments, and EOF.
+- Added an allocator-owned query representation with explicit modifier, projection,
+  and basic graph-pattern boundaries.
+- Parsed the first SPARQL 1.1 slice: SELECT with optional DISTINCT or REDUCED, wildcard
+  or variable projection, optional WHERE, and variable/IRI triple patterns.
+- Added an allocation-free borrowed algebra lowering boundary representing
+  `Project(BGP)` independently from parsing.
+- Enforced UTF-8, SPARQL variable-name ranges, IRI-reference delimiters, full-input
+  consumption, and explicit rejection of unsupported grammar.
+- Documented SPARQL ownership and corrected architecture notes that still described the
+  pre-generalized entailment implementation.
+- Added tokenizer, parser, algebra, negative-syntax, and exhaustive allocation-failure
+  tests, bringing the local suite to 113 and the complete build to 118 tests while all
+  827 integrated RDF syntax/evaluation cases continue to pass.
