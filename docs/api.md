@@ -127,6 +127,10 @@ an allocation-free `Project(BGP)` algebra view over the same storage. These view
 valid only while the query is alive and structurally unchanged. A `Query` must not be
 copied after initialization and must be released with `deinit`.
 
+The conformance suite invokes this public parser for all 97 official SPARQL 1.1
+query-syntax cases. Its exact expected-failure list is a grammar-coverage baseline, not
+an alternate parser or a claim that unsupported positive syntax is conformant.
+
 ## Indexed store
 
 `store.Store` is an allocator-owned in-memory RDF dataset with its own `TermPool`.

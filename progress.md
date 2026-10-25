@@ -177,10 +177,14 @@ separate packages only after their APIs and release cycles become independently 
 - The public `sparql` module establishes allocation-free tokenization, an owned SELECT
   syntax tree, and a borrowed `Project(BGP)` algebra boundary for the first SPARQL 1.1
   query slice.
+- The official SPARQL 1.1 query-syntax manifest is pinned and vendored with all 97
+  referenced queries; the baseline passes all 32 negative cases and explicitly tracks
+  the 65 positive cases not yet accepted by the initial grammar slice.
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 113 tests; all 827 integrated syntax/evaluation cases still pass.
+- The local suite has 113 tests; all 827 integrated RDF syntax/evaluation cases still
+  pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
 
@@ -193,14 +197,14 @@ separate packages only after their APIs and release cycles become independently 
   datatype set; optional recognized-datatype profiles cover only the datatypes explicitly
   exposed by `DatatypeProfile`.
 - Milestone 7 — SPARQL 1.1 query: in progress; tokenizer, ownership, parser, and algebra
-  foundations are implemented for SELECT projection over basic variable/IRI patterns.
+  foundations are implemented for SELECT projection over basic variable/IRI patterns,
+  with the official query-syntax suite pinned to an exact baseline.
 - Milestones 8–14: not started.
 
 ## Next actions
 
-1. Vendor and classify the official SPARQL 1.1 query syntax tests before expanding the
-   grammar beyond the first parser slice.
-2. Add BASE/PREFIX prologue handling and shared SPARQL RDF-term grammar.
+1. Add BASE/PREFIX prologue handling and shared SPARQL RDF-term grammar.
+2. Clear the corresponding official positive-syntax failures as grammar coverage grows.
 
 ## Session log
 
@@ -751,3 +755,18 @@ separate packages only after their APIs and release cycles become independently 
 - Added tokenizer, parser, algebra, negative-syntax, and exhaustive allocation-failure
   tests, bringing the local suite to 113 and the complete build to 118 tests while all
   827 integrated RDF syntax/evaluation cases continue to pass.
+
+### 2026-10-25 — SPARQL query-syntax conformance baseline
+
+- Vendored the official W3C SPARQL 1.1 query-syntax manifest and all 97 referenced
+  query files at pinned `w3c/rdf-tests` revision
+  `bfefa770267ec0e5b6e45764bbca4ee43789ba72`.
+- Recorded upstream path, revision, scope, retrieval date, and license provenance beside
+  the fixtures.
+- Added a manifest-driven runner that validates the complete 65-positive/32-negative
+  classification and executes every case through the public `sparql.parseQuery` API.
+- Established an exact ID-level baseline: all 32 negative cases pass and the 65 positive
+  cases remain expected failures for the intentionally narrow initial grammar.
+- Integrated the runner into `zig build test`; the complete build now runs 119 tests,
+  retains all 827 RDF syntax/evaluation passes, and accounts for all 97 SPARQL syntax
+  cases without exclusions.

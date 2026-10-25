@@ -225,3 +225,8 @@ variables and IRI references. Keeping unsupported grammar as an explicit syntax 
 prevents partial constructs from acquiring accidental semantics. Future grammar work
 extends the syntax owner and algebra variants while preserving tokenizer positions,
 query ownership, and the parse/lower boundary.
+
+SPARQL query grammar progress is measured against the pinned W3C SPARQL 1.1
+query-syntax manifest. The runner executes every manifest entry and keeps an exact
+test-ID baseline for unsupported positive syntax, so new grammar support removes named
+failures while accidental acceptance or rejection is reported as a regression.
