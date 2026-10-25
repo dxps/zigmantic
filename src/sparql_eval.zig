@@ -39,6 +39,188 @@ pub const SolutionSequence = struct {
     }
 };
 
+pub const ExpressionFault = error{
+    UnboundVariable,
+    TypeError,
+    UnknownTerm,
+    UnsupportedExpression,
+};
+
+pub const ExpressionResult = union(enum) {
+    value: rdf.TermId,
+    fault: ExpressionFault,
+};
+
+/// Owns RDF terms produced while evaluating expressions. Source bindings contain IDs
+/// from `source_terms`; successful expression results contain IDs from `terms`.
+pub const ExpressionEvaluator = struct {
+    allocator: std.mem.Allocator,
+    query: *const sparql.Query,
+    source_terms: *const rdf.TermPool,
+    terms: rdf.TermPool,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        query: *const sparql.Query,
+        source_terms: *const rdf.TermPool,
+    ) ExpressionEvaluator {
+        return .{
+            .allocator = allocator,
+            .query = query,
+            .source_terms = source_terms,
+            .terms = .init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *ExpressionEvaluator) void {
+        self.terms.deinit();
+        self.* = undefined;
+    }
+
+    /// Evaluates the RDF-term/variable foundation plus BOUND and logical negation.
+    /// Other operators and functions return `UnsupportedExpression` in this phase.
+    pub fn evaluate(
+        self: *ExpressionEvaluator,
+        expression_id: sparql.ExpressionId,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const expression = self.query.expression(expression_id) orelse
+            return .{ .fault = error.UnsupportedExpression };
+        return switch (expression) {
+            .variable => |variable| if (mapping.get(variable)) |value|
+                self.copySourceTerm(value)
+            else
+                .{ .fault = error.UnboundVariable },
+            .iri => |iri| self.internNamedNode(iri),
+            .literal => |literal| self.internLiteral(literal),
+            .unary => |unary| if (unary.operator == .logical_not)
+                self.evaluateLogicalNot(unary.operand, mapping)
+            else
+                .{ .fault = error.UnsupportedExpression },
+            .call => |call| if (std.mem.eql(u8, call.function, "bound"))
+                self.evaluateBound(call, mapping)
+            else
+                .{ .fault = error.UnsupportedExpression },
+            .wildcard, .binary, .membership, .exists => .{
+                .fault = error.UnsupportedExpression,
+            },
+        };
+    }
+
+    /// Implements SPARQL effective boolean value for boolean, numeric, string, and
+    /// language-tagged literals. Other RDF terms and invalid lexical forms are errors.
+    pub fn effectiveBooleanValue(self: *const ExpressionEvaluator, value: rdf.TermId) ExpressionFault!bool {
+        const view = self.terms.view(value) orelse return error.UnknownTerm;
+        const literal = switch (view) {
+            .literal => |item| item,
+            else => return error.TypeError,
+        };
+        if (std.mem.eql(u8, literal.datatype, rdf.xsd_namespace ++ "boolean")) {
+            if (std.mem.eql(u8, literal.lexical_form, "true") or
+                std.mem.eql(u8, literal.lexical_form, "1")) return true;
+            if (std.mem.eql(u8, literal.lexical_form, "false") or
+                std.mem.eql(u8, literal.lexical_form, "0")) return false;
+            return error.TypeError;
+        }
+        if (isEffectiveBooleanNumeric(literal.datatype)) {
+            const number = std.fmt.parseFloat(f64, literal.lexical_form) catch
+                return error.TypeError;
+            return number != 0 and !std.math.isNan(number);
+        }
+        if (std.mem.eql(u8, literal.datatype, rdf.xsd_string) or
+            std.mem.eql(u8, literal.datatype, rdf.rdf_lang_string))
+        {
+            return literal.lexical_form.len != 0;
+        }
+        return error.TypeError;
+    }
+
+    fn copySourceTerm(
+        self: *ExpressionEvaluator,
+        value: rdf.TermId,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const view = self.source_terms.view(value) orelse
+            return .{ .fault = error.UnknownTerm };
+        const copied = self.terms.internView(view) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => .{ .fault = error.TypeError },
+        };
+        return .{ .value = copied };
+    }
+
+    fn internNamedNode(
+        self: *ExpressionEvaluator,
+        iri: []const u8,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const value = self.terms.internNamedNode(iri) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => .{ .fault = error.TypeError },
+        };
+        return .{ .value = value };
+    }
+
+    fn internLiteral(
+        self: *ExpressionEvaluator,
+        literal: sparql.Literal,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const value = if (literal.language) |language|
+            self.terms.internLanguageLiteral(literal.lexical_form, language)
+        else
+            self.terms.internTypedLiteral(literal.lexical_form, literal.datatype);
+        const id = value catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => .{ .fault = error.TypeError },
+        };
+        return .{ .value = id };
+    }
+
+    fn internBoolean(
+        self: *ExpressionEvaluator,
+        value: bool,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const id = self.terms.internTypedLiteral(
+            if (value) "true" else "false",
+            rdf.xsd_namespace ++ "boolean",
+        ) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => unreachable,
+        };
+        return .{ .value = id };
+    }
+
+    fn evaluateLogicalNot(
+        self: *ExpressionEvaluator,
+        operand: sparql.ExpressionId,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const result = try self.evaluate(operand, mapping);
+        const value = switch (result) {
+            .value => |item| item,
+            .fault => return result,
+        };
+        const boolean = self.effectiveBooleanValue(value) catch |fault|
+            return .{ .fault = fault };
+        return self.internBoolean(!boolean);
+    }
+
+    fn evaluateBound(
+        self: *ExpressionEvaluator,
+        call: sparql.FunctionCall,
+        mapping: SolutionMapping,
+    ) std.mem.Allocator.Error!ExpressionResult {
+        const arguments = self.query.expressionArguments(call.arguments) orelse
+            return .{ .fault = error.UnsupportedExpression };
+        if (arguments.len != 1) return .{ .fault = error.UnsupportedExpression };
+        const expression = self.query.expression(arguments[0]) orelse
+            return .{ .fault = error.UnsupportedExpression };
+        const variable = switch (expression) {
+            .variable => |value| value,
+            else => return .{ .fault = error.UnsupportedExpression },
+        };
+        return self.internBoolean(mapping.get(variable) != null);
+    }
+};
+
 const BindingKey = union(enum) {
     variable: []const u8,
     labeled_blank_node: []const u8,
@@ -249,6 +431,14 @@ fn optionalStringEql(left: ?[]const u8, right: ?[]const u8) bool {
     return std.mem.eql(u8, left.?, right.?);
 }
 
+fn isEffectiveBooleanNumeric(datatype: []const u8) bool {
+    return std.mem.eql(u8, datatype, rdf.xsd_integer) or
+        std.mem.eql(u8, datatype, rdf.xsd_int) or
+        std.mem.eql(u8, datatype, rdf.xsd_decimal) or
+        std.mem.eql(u8, datatype, rdf.xsd_float) or
+        std.mem.eql(u8, datatype, rdf.xsd_double);
+}
+
 fn boundValue(component: PatternComponent, mapping: InternalMapping) ?rdf.TermId {
     return switch (component) {
         .key => |key| mapping.get(key),
@@ -424,6 +614,97 @@ test "rejects graph operators and property paths in the BGP evaluator" {
     );
 }
 
+test "evaluates variables and RDF constants into an owned term scope" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    const source_value = try source.internLanguageLiteral("hello", "EN");
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "SELECT (?value AS ?copy) (<urn:constant> AS ?iri) ('text' AS ?text) {}",
+    );
+    defer query.deinit();
+    var bindings = [_]SolutionBinding{.{ .variable = "value", .value = source_value }};
+    const mapping = SolutionMapping{ .bindings = bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+
+    const projection = query.projection().items;
+    const copied = (try evaluator.evaluate(projection[0].expression.expression, mapping)).value;
+    const iri = (try evaluator.evaluate(projection[1].expression.expression, mapping)).value;
+    const text = (try evaluator.evaluate(projection[2].expression.expression, mapping)).value;
+    const copied_view = evaluator.terms.view(copied).?.literal;
+    try std.testing.expectEqualStrings("hello", copied_view.lexical_form);
+    try std.testing.expectEqualStrings("en", copied_view.language.?);
+    try std.testing.expectEqualStrings("urn:constant", evaluator.terms.view(iri).?.named_node);
+    try std.testing.expectEqualStrings("text", evaluator.terms.view(text).?.literal.lexical_form);
+    try std.testing.expectEqual(@as(usize, 1), source.count());
+}
+
+test "computes SPARQL effective boolean values" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    var query = try sparql.parseQuery(std.testing.allocator, "SELECT * {}");
+    defer query.deinit();
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+
+    const true_value = try evaluator.terms.internTypedLiteral("1", rdf.xsd_namespace ++ "boolean");
+    const false_value = try evaluator.terms.internTypedLiteral("false", rdf.xsd_namespace ++ "boolean");
+    const zero = try evaluator.terms.internTypedLiteral("0", rdf.xsd_integer);
+    const nonzero = try evaluator.terms.internTypedLiteral("-2.5", rdf.xsd_decimal);
+    const empty = try evaluator.terms.internSimpleLiteral("");
+    const language = try evaluator.terms.internLanguageLiteral("salut", "ro");
+    const iri = try evaluator.terms.internNamedNode("urn:value");
+
+    try std.testing.expect(try evaluator.effectiveBooleanValue(true_value));
+    try std.testing.expect(!try evaluator.effectiveBooleanValue(false_value));
+    try std.testing.expect(!try evaluator.effectiveBooleanValue(zero));
+    try std.testing.expect(try evaluator.effectiveBooleanValue(nonzero));
+    try std.testing.expect(!try evaluator.effectiveBooleanValue(empty));
+    try std.testing.expect(try evaluator.effectiveBooleanValue(language));
+    try std.testing.expectError(error.TypeError, evaluator.effectiveBooleanValue(iri));
+    const unknown: rdf.TermId = @fromBackingInt(999);
+    try std.testing.expectError(error.UnknownTerm, evaluator.effectiveBooleanValue(unknown));
+}
+
+test "represents expression faults and evaluates logical not and BOUND" {
+    var source = rdf.TermPool.init(std.testing.allocator);
+    defer source.deinit();
+    const false_value = try source.internTypedLiteral("false", rdf.xsd_namespace ++ "boolean");
+    var query = try sparql.parseQuery(
+        std.testing.allocator,
+        "SELECT (!?flag AS ?not) (BOUND(?missing) AS ?bound) (?missing AS ?copy) " ++
+            "(?flag + 1 AS ?unsupported) {}",
+    );
+    defer query.deinit();
+    var bindings = [_]SolutionBinding{.{ .variable = "flag", .value = false_value }};
+    const mapping = SolutionMapping{ .bindings = bindings[0..] };
+    var evaluator = ExpressionEvaluator.init(std.testing.allocator, &query, &source);
+    defer evaluator.deinit();
+    const projection = query.projection().items;
+
+    const negated = (try evaluator.evaluate(projection[0].expression.expression, mapping)).value;
+    try std.testing.expect(try evaluator.effectiveBooleanValue(negated));
+    const bound = (try evaluator.evaluate(projection[1].expression.expression, mapping)).value;
+    try std.testing.expect(!try evaluator.effectiveBooleanValue(bound));
+    try std.testing.expectEqual(
+        error.UnboundVariable,
+        (try evaluator.evaluate(projection[2].expression.expression, mapping)).fault,
+    );
+    try std.testing.expectEqual(
+        error.UnsupportedExpression,
+        (try evaluator.evaluate(projection[3].expression.expression, mapping)).fault,
+    );
+}
+
+test "expression evaluation handles every allocation failure" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        expectExpressionEvaluationSucceeds,
+        .{},
+    );
+}
+
 test "BGP evaluation handles every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, expectEvaluationSucceeds, .{});
 }
@@ -441,4 +722,18 @@ fn expectEvaluationSucceeds(allocator: std.mem.Allocator) !void {
     var solutions = try evaluateBasicGraphPattern(allocator, &query, &dataset);
     defer solutions.deinit();
     try std.testing.expectEqual(@as(usize, 1), solutions.mappings.len);
+}
+
+fn expectExpressionEvaluationSucceeds(allocator: std.mem.Allocator) !void {
+    var source = rdf.TermPool.init(allocator);
+    defer source.deinit();
+    const value = try source.internSimpleLiteral("value");
+    var query = try sparql.parseQuery(allocator, "SELECT (?input AS ?output) {}");
+    defer query.deinit();
+    var bindings = [_]SolutionBinding{.{ .variable = "input", .value = value }};
+    var evaluator = ExpressionEvaluator.init(allocator, &query, &source);
+    defer evaluator.deinit();
+    const expression_id = query.projection().items[0].expression.expression;
+    const result = try evaluator.evaluate(expression_id, .{ .bindings = bindings[0..] });
+    try std.testing.expect(result == .value);
 }

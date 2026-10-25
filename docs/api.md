@@ -252,6 +252,23 @@ This entry point intentionally rejects property paths and non-triple group eleme
 solution modifiers, projection, and query-form result construction are subsequent
 evaluation layers.
 
+`sparql_eval.ExpressionEvaluator` establishes a separate allocator-owned RDF term pool
+for expression results. Its source `TermPool` supplies solution-binding values, which
+are copied by value into the result pool; query IRIs and literals are interned there
+directly. This prevents evaluation from mutating the source store or mixing pool-local
+term identifiers. The evaluator borrows its query and source pool and must be
+deinitialized before either is released.
+
+`evaluate(expression_id, mapping)` returns an `ExpressionResult`: either a result-pool
+`TermId` or an `ExpressionFault`. Unbound variables, unknown source IDs, RDF type errors,
+and not-yet-supported expression forms remain distinguishable from allocator failure.
+The initial runtime evaluates variables, RDF constants, `BOUND`, and logical negation.
+
+`effectiveBooleanValue` implements SPARQL EBV for valid boolean and numeric literals,
+simple strings, and language-tagged strings. Zero, NaN, false, and empty strings are
+false; other supported values are true. Invalid lexical forms and RDF terms without a
+defined EBV produce `TypeError`.
+
 ## Indexed store
 
 `store.Store` is an allocator-owned in-memory RDF dataset with its own `TermPool`.

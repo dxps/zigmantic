@@ -182,8 +182,8 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 150 tests; all 827 integrated RDF syntax/evaluation cases still
-  pass, and the complete 156-test build additionally classifies all 97 pinned SPARQL
+- The local suite has 154 tests; all 827 integrated RDF syntax/evaluation cases still
+  pass, and the complete 160-test build additionally classifies all 97 pinned SPARQL
   query-syntax cases.
 
 ## Milestone status
@@ -209,7 +209,9 @@ separate packages only after their APIs and release cycles become independently 
   built-in call has a strict syntax signature; a differential audit parses all 598
   SPARQL 1.0/1.1 evaluation queries and all 210 positive syntax queries while rejecting
   all 91 negative syntax queries; owned solution mappings and indexed default-graph BGP
-  evaluation are implemented, while the remaining algebra and result layers are not.
+  evaluation are implemented; expression evaluation now has result-owned RDF terms,
+  semantic faults, BOUND, logical negation, and effective boolean values, while the
+  remaining operators, algebra, and result layers are not.
 - Milestones 8–14: not started.
 
 ## Milestone 7 fixed plan
@@ -223,7 +225,9 @@ remain. The fixed breakdown is:
 - 7.4.1–7.4.13 — expression syntax, all four query forms, syntax closure, differential
   checks, and parser hardening: complete.
 - 7.5.1 — solution mappings and BGP evaluation: complete.
-- 7.5.2–7.5.7 — expressions; joins and optional operators; datasets and services;
+- 7.5.2 — expression evaluation: in progress; result-term ownership, semantic faults,
+  variables, constants, BOUND, logical negation, and effective boolean value are done.
+- 7.5.3–7.5.7 — joins and optional operators; datasets and services;
   property paths; grouping/modifiers; subqueries and query forms.
 - 7.6.1–7.6.3 — result model and SELECT/ASK; JSON/XML; CSV/TSV and RDF-form integration.
 - 7.7.1–7.7.2 — W3C evaluation manifests; fuzzing, performance, and public-API audit.
@@ -233,8 +237,8 @@ work should replace or explicitly revise this list rather than silently extendin
 
 ## Next actions
 
-1. Implement RDF-term expression evaluation, expression errors, and effective boolean
-   values over solution mappings (7.5.2).
+1. Complete numeric arithmetic, comparisons, logical error propagation, and scalar
+   built-ins over the expression runtime (7.5.2).
 2. Promote broader W3C parser coverage into a durable automated gate alongside the
    evaluation manifests introduced in milestone 7.7.
 
@@ -1113,3 +1117,23 @@ work should replace or explicitly revise this list rather than silently extendin
 - Advanced the fixed milestone plan to 20 of 31 increments complete, with 11 remaining.
 - Retained the pinned 97/97 syntax gate; the local suite now has 150 tests and the
   complete build passes all 156 tests.
+
+### 2026-10-25 — SPARQL expression runtime foundation
+
+- Began milestone 7.5 step 2 with an allocator-owned expression evaluator whose result
+  term pool is separate from the source store's term pool.
+- Added explicit expression results that distinguish RDF values from unbound-variable,
+  unknown-term, type, and unsupported-expression faults without conflating semantic
+  faults with allocation failure.
+- Evaluated bound variables by RDF value copy and evaluated query IRI and literal
+  constants directly into the result term scope without mutating the source pool.
+- Implemented SPARQL effective boolean value for boolean, numeric, simple-string, and
+  language-tagged literals, including type errors for unsupported RDF terms and invalid
+  lexical forms.
+- Added BOUND and logical-negation evaluation on top of the new EBV boundary.
+- Added ownership, constant/variable, EBV, semantic-fault, BOUND/not, and exhaustive
+  allocation-failure tests.
+- Kept the fixed milestone count at 20 of 31 because step 7.5.2 remains in progress;
+  arithmetic, comparisons, logical error propagation, and scalar built-ins remain.
+- Retained the pinned 97/97 syntax gate; the local suite now has 154 tests and the
+  complete build passes all 160 tests.
