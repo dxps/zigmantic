@@ -28,6 +28,9 @@ pub const TokenTag = enum {
     minus_keyword,
     union_keyword,
     optional,
+    graph_keyword,
+    service,
+    silent,
     from,
     named,
     group_keyword,
@@ -382,6 +385,12 @@ pub const Tokenizer = struct {
             .union_keyword
         else if (std.ascii.eqlIgnoreCase(lexeme, "OPTIONAL"))
             .optional
+        else if (std.ascii.eqlIgnoreCase(lexeme, "GRAPH"))
+            .graph_keyword
+        else if (std.ascii.eqlIgnoreCase(lexeme, "SERVICE"))
+            .service
+        else if (std.ascii.eqlIgnoreCase(lexeme, "SILENT"))
+            .silent
         else if (std.ascii.eqlIgnoreCase(lexeme, "FROM"))
             .from
         else if (std.ascii.eqlIgnoreCase(lexeme, "NAMED"))
@@ -602,6 +611,22 @@ pub const BinaryGroup = struct {
     right: GroupId,
 };
 
+pub const GraphSelector = union(enum) {
+    variable: []const u8,
+    iri: []const u8,
+};
+
+pub const GraphPattern = struct {
+    selector: GraphSelector,
+    group: GroupId,
+};
+
+pub const ServicePattern = struct {
+    selector: GraphSelector,
+    group: GroupId,
+    silent: bool = false,
+};
+
 pub const GroupElement = union(enum) {
     triple: usize,
     filter: ExpressionId,
@@ -612,6 +637,8 @@ pub const GroupElement = union(enum) {
     union_group: BinaryGroup,
     subquery: SubqueryId,
     values: ValuesId,
+    graph: GraphPattern,
+    service: ServicePattern,
 };
 
 const Group = struct {
@@ -1751,6 +1778,32 @@ const Parser = struct {
                 if ((try self.peek()).tag == .dot) _ = try self.take();
                 continue;
             }
+            if ((try self.peek()).tag == .graph_keyword) {
+                _ = try self.take();
+                const selector = try self.parseGraphSelector();
+                try self.appendGroupElement(.{ .graph = .{
+                    .selector = selector,
+                    .group = try self.parseBracedGroup(),
+                } });
+                if ((try self.peek()).tag == .dot) _ = try self.take();
+                continue;
+            }
+            if ((try self.peek()).tag == .service) {
+                _ = try self.take();
+                var silent = false;
+                if ((try self.peek()).tag == .silent) {
+                    _ = try self.take();
+                    silent = true;
+                }
+                const selector = try self.parseGraphSelector();
+                try self.appendGroupElement(.{ .service = .{
+                    .selector = selector,
+                    .group = try self.parseBracedGroup(),
+                    .silent = silent,
+                } });
+                if ((try self.peek()).tag == .dot) _ = try self.take();
+                continue;
+            }
             if ((try self.peek()).tag == .filter) {
                 try self.parseFilter();
                 if ((try self.peek()).tag == .dot) _ = try self.take();
@@ -1776,6 +1829,16 @@ const Parser = struct {
                 return error.InvalidSyntax;
             }
         }
+    }
+
+    fn parseGraphSelector(self: *Parser) ParseError!GraphSelector {
+        const token = try self.take();
+        return switch (token.tag) {
+            .variable => .{ .variable = try self.query.own(token.lexeme) },
+            .iri_reference => .{ .iri = try self.resolveIri(token.lexeme) },
+            .prefixed_name => .{ .iri = try self.expandPrefixedName(token.lexeme) },
+            else => error.InvalidSyntax,
+        };
     }
 
     fn parseSubquery(self: *Parser) ParseError!void {
@@ -1927,6 +1990,10 @@ const Parser = struct {
                 .optional => |nested| if (self.groupContainsVariable(nested, name)) return true,
                 .union_group => |branches| if (self.groupContainsVariable(branches.left, name) or
                     self.groupContainsVariable(branches.right, name)) return true,
+                .graph => |pattern| if (selectorIsVariable(pattern.selector, name) or
+                    self.groupContainsVariable(pattern.group, name)) return true,
+                .service => |pattern| if (selectorIsVariable(pattern.selector, name) or
+                    self.groupContainsVariable(pattern.group, name)) return true,
                 .subquery => |id| if (projectionHasVariable(
                     self.query.subqueries.items[id].projection_items,
                     name,
@@ -2493,7 +2560,15 @@ fn canStartPredicate(tag: TokenTag) bool {
 
 fn canStartGroupNonTriple(tag: TokenTag) bool {
     return tag == .filter or tag == .bind or tag == .left_brace or tag == .optional or
-        tag == .minus_keyword or tag == .values_keyword;
+        tag == .minus_keyword or tag == .values_keyword or tag == .graph_keyword or
+        tag == .service;
+}
+
+fn selectorIsVariable(selector: GraphSelector, name: []const u8) bool {
+    return switch (selector) {
+        .variable => |variable| std.mem.eql(u8, variable, name),
+        .iri => false,
+    };
 }
 
 fn canStartGroupCondition(tag: TokenTag) bool {
@@ -3260,6 +3335,29 @@ test "parses EXISTS and NOT EXISTS with query-local groups" {
     try std.testing.expectEqual(@as(usize, 1), query.groupElements(not_exists.group).?.len);
 }
 
+test "preserves GRAPH and SERVICE selectors with nested groups" {
+    var query = try parseQuery(
+        std.testing.allocator,
+        "PREFIX ex: <https://example.com/> SELECT * { " ++
+            "GRAPH ?g { ?s ex:p ?o } " ++
+            "SERVICE SILENT ex:endpoint { ?s ex:q ?remote } " ++
+            "SERVICE ?endpoint { ?s ex:r ?value } }",
+    );
+    defer query.deinit();
+
+    const elements = query.groupElements(query.root_group.?).?;
+    try std.testing.expectEqual(@as(usize, 3), elements.len);
+    try std.testing.expectEqualStrings("g", elements[0].graph.selector.variable);
+    try std.testing.expectEqual(@as(usize, 1), query.groupElements(elements[0].graph.group).?.len);
+    try std.testing.expect(elements[1].service.silent);
+    try std.testing.expectEqualStrings(
+        "https://example.com/endpoint",
+        elements[1].service.selector.iri,
+    );
+    try std.testing.expect(!elements[2].service.silent);
+    try std.testing.expectEqualStrings("endpoint", elements[2].service.selector.variable);
+}
+
 test "lowers SELECT syntax to project over a BGP" {
     var query = try parseQuery(std.testing.allocator, "SELECT ?s WHERE { ?s <urn:p> <urn:o> }");
     defer query.deinit();
@@ -3390,31 +3488,34 @@ test "preserves solution modifiers on SELECT subqueries" {
 
 test "rejects malformed or unsupported query syntax" {
     const invalid = [_][]const u8{
-        "",                                                     "SELECT WHERE {}",                                                    "SELECT * WHERE { ?s <urn:p> }",
-        "SELECT * WHERE { ?s \"literal\" ?o }",                 "ASK SELECT * {}",                                                    "SELECT * WHERE { ?s <broken iri> ?o }",
-        "SELECT ?not-valid WHERE {}",                           "PREFIX ex:bad <urn:ex> SELECT * {}",                                 "PREFIX bad <urn:ex> SELECT * {}",
-        "PREFIX ex: <urn:ex> SELECT * { ex:s missing:p ex:o }", "BASE not-an-iri SELECT * {}",                                        "PREFIX ex: <urn:ex> SELECT * { ex:a%ZZ ex:p ex:o }",
-        "PREFIX ex: <urn:ex> SELECT * { ex:a\\q ex:p ex:o }",   "SELECT * { ?s <urn:p> \"bad\\q\" }",                                 "SELECT * { ?s <urn:p> \"unterminated }",
-        "SELECT * { ?s <urn:p> \"value\"@en--US }",             "SELECT * { ?s <urn:p> \"value\"^^_:datatype }",                      "SELECT * { _:trailing. <urn:p> <urn:o> }",
-        "SELECT * { ?s <urn:p> \"\\uD800\" }",                  "SELECT * { ?s <urn:\\U00110000> ?o }",                               "SELECT * { ?s <urn:p> <urn:o>, }",
-        "SELECT * { ?s ; <urn:p> <urn:o> }",                    "SELECT * { [] }",                                                    "SELECT * { ?s <urn:p> ( <urn:a> }",
-        "SELECT * { [ <urn:p> <urn:o> }",                       "SELECT * { ?s <urn:p>/ ?o }",                                        "SELECT * { ?s <urn:p>** ?o }",
-        "SELECT * { ?s ^ ?o }",                                 "SELECT * { ?s !(<urn:p>/<urn:q>) ?o }",                              "SELECT * { ?s ?p* ?o }",
-        "SELECT * { ?s () ?o }",                                "SELECT * { ?s |<urn:p> ?o }",                                        "SELECT (1 AS ?x) (2 AS ?x) {}",
-        "SELECT (?x + ?y) {}",                                  "SELECT (?x AS <urn:x>) {}",                                          "SELECT (COUNT(?x, ?y) AS ?count) {}",
-        "SELECT (SUM(*) AS ?sum) {}",                           "SELECT (datatype(DISTINCT ?x) AS ?dt) {}",                           "SELECT (COUNT(?x; SEPARATOR=',') AS ?count) {}",
-        "SELECT (unknown(?x) AS ?value) {}",                    "SELECT (GROUP_CONCAT(?x; SEPARATOR='x'^^<urn:type>) AS ?joined) {}", "SELECT * { ?s ?p ?o FILTER(?o IN(1,)) }",
-        "SELECT * { ?s ?p ?o FILTER(?o < ?s < 3) }",            "SELECT * { ?s ?p ?o FILTER(?o & true) }",                            "SELECT * { ?s ?p ?o BIND(?o AS ?o) }",
-        "SELECT * { BIND(1 AS ?x) BIND(2 AS ?x) }",             "SELECT * { FILTER true }",                                           "SELECT * { { ?s ?p ?o } BIND(1 AS ?s) }",
-        "SELECT * { { ?s ?p ?o } UNION }",                      "SELECT * { MINUS ?s ?p ?o }",                                        "SELECT * { FILTER(EXISTS ?s ?p ?o) }",
-        "CONSTRUCT { ?s ?p ?o }",                               "SELECT * FROM NAMED WHERE {}",                                       "SELECT * { {} SELECT * {} }",
-        "SELECT (1 AS ?x) { SELECT (2 AS ?x) {} }",             "SELECT * { SELECT (1 AS ?x) (2 AS ?x) {} }",                         "SELECT * { SELECT * WHERE }",
-        "SELECT * {} VALUES (?x ?x) { (1 2) }",                 "SELECT * { VALUES (?x ?y) { (1) } }",                                "SELECT * { VALUES (?x ?y) { (1 2 3) } }",
-        "SELECT (?o AS ?x) { ?s ?p ?o } GROUP BY ?s",           "SELECT (STR(?o) AS ?x) { ?s ?p ?o } GROUP BY ?s",                    "SELECT * { VALUES ?x { _:blank } }",
-        "SELECT ?x {} GROUP BY (?a AS ?x) (?b AS ?x)",          "SELECT * {} GROUP BY ?x",                                            "SELECT ?x {} HAVING ?x",
-        "SELECT ?x {} ORDER BY ASC ?x",                         "SELECT ?x {} ORDER BY",                                              "SELECT ?x {} LIMIT -1",
-        "SELECT ?x {} LIMIT +1",                                "SELECT ?x {} LIMIT 1 LIMIT 2",                                       "SELECT ?x {} OFFSET 1 OFFSET 2",
-        "SELECT ?x {} LIMIT 1.5",                               "SELECT (?x AS ?g) { ?g ?p ?o } GROUP BY (?x AS ?g)",                 "SELECT ?g {} GROUP BY (?x AS ?g) VALUES ?g { 1 }",
+        "",                                                       "SELECT WHERE {}",                                                    "SELECT * WHERE { ?s <urn:p> }",
+        "SELECT * WHERE { ?s \"literal\" ?o }",                   "ASK SELECT * {}",                                                    "SELECT * WHERE { ?s <broken iri> ?o }",
+        "SELECT ?not-valid WHERE {}",                             "PREFIX ex:bad <urn:ex> SELECT * {}",                                 "PREFIX bad <urn:ex> SELECT * {}",
+        "PREFIX ex: <urn:ex> SELECT * { ex:s missing:p ex:o }",   "BASE not-an-iri SELECT * {}",                                        "PREFIX ex: <urn:ex> SELECT * { ex:a%ZZ ex:p ex:o }",
+        "PREFIX ex: <urn:ex> SELECT * { ex:a\\q ex:p ex:o }",     "SELECT * { ?s <urn:p> \"bad\\q\" }",                                 "SELECT * { ?s <urn:p> \"unterminated }",
+        "SELECT * { ?s <urn:p> \"value\"@en--US }",               "SELECT * { ?s <urn:p> \"value\"^^_:datatype }",                      "SELECT * { _:trailing. <urn:p> <urn:o> }",
+        "SELECT * { ?s <urn:p> \"\\uD800\" }",                    "SELECT * { ?s <urn:\\U00110000> ?o }",                               "SELECT * { ?s <urn:p> <urn:o>, }",
+        "SELECT * { ?s ; <urn:p> <urn:o> }",                      "SELECT * { [] }",                                                    "SELECT * { ?s <urn:p> ( <urn:a> }",
+        "SELECT * { [ <urn:p> <urn:o> }",                         "SELECT * { ?s <urn:p>/ ?o }",                                        "SELECT * { ?s <urn:p>** ?o }",
+        "SELECT * { ?s ^ ?o }",                                   "SELECT * { ?s !(<urn:p>/<urn:q>) ?o }",                              "SELECT * { ?s ?p* ?o }",
+        "SELECT * { ?s () ?o }",                                  "SELECT * { ?s |<urn:p> ?o }",                                        "SELECT (1 AS ?x) (2 AS ?x) {}",
+        "SELECT (?x + ?y) {}",                                    "SELECT (?x AS <urn:x>) {}",                                          "SELECT (COUNT(?x, ?y) AS ?count) {}",
+        "SELECT (SUM(*) AS ?sum) {}",                             "SELECT (datatype(DISTINCT ?x) AS ?dt) {}",                           "SELECT (COUNT(?x; SEPARATOR=',') AS ?count) {}",
+        "SELECT (unknown(?x) AS ?value) {}",                      "SELECT (GROUP_CONCAT(?x; SEPARATOR='x'^^<urn:type>) AS ?joined) {}", "SELECT * { ?s ?p ?o FILTER(?o IN(1,)) }",
+        "SELECT * { ?s ?p ?o FILTER(?o < ?s < 3) }",              "SELECT * { ?s ?p ?o FILTER(?o & true) }",                            "SELECT * { ?s ?p ?o BIND(?o AS ?o) }",
+        "SELECT * { BIND(1 AS ?x) BIND(2 AS ?x) }",               "SELECT * { FILTER true }",                                           "SELECT * { { ?s ?p ?o } BIND(1 AS ?s) }",
+        "SELECT * { { ?s ?p ?o } UNION }",                        "SELECT * { MINUS ?s ?p ?o }",                                        "SELECT * { FILTER(EXISTS ?s ?p ?o) }",
+        "CONSTRUCT { ?s ?p ?o }",                                 "SELECT * FROM NAMED WHERE {}",                                       "SELECT * { {} SELECT * {} }",
+        "SELECT (1 AS ?x) { SELECT (2 AS ?x) {} }",               "SELECT * { SELECT (1 AS ?x) (2 AS ?x) {} }",                         "SELECT * { SELECT * WHERE }",
+        "SELECT * {} VALUES (?x ?x) { (1 2) }",                   "SELECT * { VALUES (?x ?y) { (1) } }",                                "SELECT * { VALUES (?x ?y) { (1 2 3) } }",
+        "SELECT (?o AS ?x) { ?s ?p ?o } GROUP BY ?s",             "SELECT (STR(?o) AS ?x) { ?s ?p ?o } GROUP BY ?s",                    "SELECT * { VALUES ?x { _:blank } }",
+        "SELECT ?x {} GROUP BY (?a AS ?x) (?b AS ?x)",            "SELECT * {} GROUP BY ?x",                                            "SELECT ?x {} HAVING ?x",
+        "SELECT ?x {} ORDER BY ASC ?x",                           "SELECT ?x {} ORDER BY",                                              "SELECT ?x {} LIMIT -1",
+        "SELECT ?x {} LIMIT +1",                                  "SELECT ?x {} LIMIT 1 LIMIT 2",                                       "SELECT ?x {} OFFSET 1 OFFSET 2",
+        "SELECT ?x {} LIMIT 1.5",                                 "SELECT (?x AS ?g) { ?g ?p ?o } GROUP BY (?x AS ?g)",                 "SELECT ?g {} GROUP BY (?x AS ?g) VALUES ?g { 1 }",
+        "SELECT * { GRAPH \"name\" {} }",                         "SELECT * { GRAPH <urn:g> }",                                         "SELECT * { SERVICE SILENT SILENT <urn:s> {} }",
+        "SELECT * { SERVICE _:endpoint {} }",                     "SELECT * { SILENT <urn:s> {} }",                                     "SELECT * { GRAPH ?g {} BIND(1 AS ?g) }",
+        "SELECT * { SERVICE ?endpoint {} BIND(1 AS ?endpoint) }",
     };
     for (invalid) |input| {
         try std.testing.expectError(error.InvalidSyntax, parseQuery(std.testing.allocator, input));
@@ -3434,7 +3535,9 @@ test "query parsing handles every allocation failure" {
             "FILTER(?o NOT IN(1, 2)) BIND(?o+1 AS ?bound) " ++
             "FILTER(EXISTS { ?o ex:seen true } && NOT EXISTS { ?o ex:hidden true }) " ++
             "MINUS { ?o ex:removed true } " ++
-            "{ SELECT (?o AS ?nested) { ?o ex:nested true } } } " ++
+            "{ SELECT (?o AS ?nested) { ?o ex:nested true } } " ++
+            "GRAPH ?graph { ?o ex:graph true } " ++
+            "SERVICE SILENT ex:service { ?o ex:remote true } } " ++
             "GROUP BY ?s HAVING (COUNT(*) > 0) " ++
             "ORDER BY DESC(COUNT(*)) ?s LIMIT 5 OFFSET 1 " ++
             "VALUES (?extra ?missing) { (1 UNDEF) }",
@@ -3444,5 +3547,5 @@ test "query parsing handles every allocation failure" {
 fn expectQueryParses(allocator: std.mem.Allocator, input: []const u8) !void {
     var query = try parseQuery(allocator, input);
     defer query.deinit();
-    try std.testing.expectEqual(@as(usize, 12), query.patterns().len);
+    try std.testing.expectEqual(@as(usize, 14), query.patterns().len);
 }

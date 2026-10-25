@@ -182,7 +182,7 @@ separate packages only after their APIs and release cycles become independently 
 - Exhaustive allocation-failure injection covers all public entailment and consistency
   entry points without leaks or swallowed errors.
 - All 48 active official RDF 1.1 model-theory cases pass with no expected failures.
-- The local suite has 134 tests; all 827 integrated RDF syntax/evaluation cases still
+- The local suite has 135 tests; all 827 integrated RDF syntax/evaluation cases still
   pass, and the complete build additionally classifies all 97 SPARQL query-syntax cases.
 
 ## Milestone status
@@ -203,15 +203,15 @@ separate packages only after their APIs and release cycles become independently 
   plus SELECT projection expressions, aggregate calls, relational/logical expressions,
   FILTER, BIND, nested groups, OPTIONAL, UNION, MINUS, EXISTS/NOT EXISTS, SELECT
   subqueries, ASK, CONSTRUCT WHERE, dataset clauses, GROUP BY aliases, HAVING, ORDER BY,
-  LIMIT/OFFSET, and inline/trailing VALUES; all 97 cases in the pinned query-syntax
-  manifest pass, while grammar absent from that manifest and query evaluation remain
-  incomplete.
+  LIMIT/OFFSET, inline/trailing VALUES, GRAPH, and SERVICE/SERVICE SILENT; all 97 cases
+  in the pinned query-syntax manifest pass, while grammar absent from that manifest and
+  query evaluation remain incomplete.
 - Milestones 8–14: not started.
 
 ## Next actions
 
-1. Add GRAPH and SERVICE patterns, then complete built-in expression syntax before
-   freezing the first evaluation-ready query boundary.
+1. Complete built-in expression syntax and arity validation, then add DESCRIBE and
+   explicit CONSTRUCT templates before freezing the first evaluation-ready boundary.
 2. Continue milestone 7 with solution mappings and BGP evaluation over the indexed
    store.
 
@@ -974,3 +974,18 @@ separate packages only after their APIs and release cycles become independently 
   and exhaustive allocation-failure coverage.
 - Retained the 97/97 W3C query-syntax baseline; the local suite now has 134 tests and
   the complete build passes all 140 tests.
+
+### 2026-10-25 — SPARQL GRAPH and SERVICE patterns
+
+- Added variable and resolved-IRI graph selectors with a dedicated public union that
+  excludes invalid literal and blank-node selectors by construction.
+- Added GRAPH group elements and SERVICE/SERVICE SILENT elements referencing stable
+  query-local group IDs.
+- Extended recursive variable-scope checks through selectors and nested GRAPH/SERVICE
+  groups so later BIND aliases cannot overwrite introduced variables.
+- Kept SERVICE parsing structural and allocation-only; it performs no endpoint access
+  and reserves remote execution for a future caller-provided interface.
+- Added selector, SILENT, nested-group, malformed-syntax, scope, and exhaustive
+  allocation-failure coverage.
+- Retained the 97/97 W3C query-syntax baseline; the local suite now has 135 tests and
+  the complete build passes all 141 tests.

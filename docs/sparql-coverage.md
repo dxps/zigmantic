@@ -36,8 +36,8 @@ subqueries.
 | FILTER, BIND, EXISTS, and NOT EXISTS | Syntax foundation | Complete expression coverage and evaluation. |
 | Inline VALUES | Implemented | Add table-join evaluation. |
 | Subqueries | Syntax foundation | Add projection boundaries and evaluation. |
-| GRAPH | Missing | Add variable/IRI graph selectors and dataset evaluation. |
-| SERVICE and SERVICE SILENT | Missing | Add syntax and an explicit pluggable remote-execution boundary. |
+| GRAPH | Syntax foundation | Add named-dataset evaluation. |
+| SERVICE and SERVICE SILENT | Syntax foundation | Add a pluggable remote-execution interface and evaluation. |
 
 This area maps to productions 53–72. `SERVICE` must not acquire implicit networking;
 evaluation will require a caller-supplied service interface.
@@ -83,9 +83,8 @@ section 18. Evaluation is not implemented. Remaining execution work includes:
 
 ## Planned implementation order
 
-1. Add GRAPH and SERVICE graph-pattern nodes, keeping remote execution injectable.
-2. Complete built-in expression syntax and arity validation.
-3. Add DESCRIBE and explicit CONSTRUCT templates.
-4. Freeze the first evaluation-ready AST/algebra boundary, then implement solution
+1. Complete built-in expression syntax and arity validation.
+2. Add DESCRIBE and explicit CONSTRUCT templates.
+3. Freeze the first evaluation-ready AST/algebra boundary, then implement solution
    mappings and BGP evaluation over the indexed store.
 

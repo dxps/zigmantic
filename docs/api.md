@@ -174,6 +174,11 @@ and NOT EXISTS expressions reference the same group arena. `Query.groupElements`
 resolves IDs, while `BasicGraphPattern.groups` provides the equivalent allocation-free
 resolver and root ID from the lowered algebra view.
 
+GRAPH and SERVICE elements retain a variable or resolved-IRI `GraphSelector` plus a
+nested group ID. SERVICE additionally retains its SILENT flag. Parsing these elements
+performs no network access; later evaluation will require an explicitly supplied service
+executor.
+
 SELECT subqueries retain their own modifier, projection, and group root behind a stable
 `SubqueryId`. `Query.subquery` resolves that ID, and projected aliases are checked
 against the variables visible from that subquery without conflating sibling scopes.

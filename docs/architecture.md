@@ -271,6 +271,12 @@ optional, and union branches for BIND aliases. The borrowed algebra carries a
 `GroupTable` resolver back to the immutable query owner, avoiding allocation or copied
 group slices during lowering.
 
+GRAPH and SERVICE elements use the same group arena and pair their nested group with a
+variable or resolved-IRI selector. SERVICE stores SILENT as syntax only. The core parser
+does not dereference endpoints, and eventual SERVICE evaluation will depend on a
+caller-provided interface so applications retain control over networking, credentials,
+timeouts, and policy.
+
 SELECT subqueries reuse the expression and group arenas but own independent projection
 slices, preserving projection scope while keeping every ID query-local. ASK and the
 CONSTRUCT WHERE shorthand reuse the same root-group representation. Top-level FROM and
